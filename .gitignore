@@ -129,3 +129,6 @@ dmypy.json
 *.swo
 *~
 .DS_Store
+
+# Generated games
+generated_game*/
