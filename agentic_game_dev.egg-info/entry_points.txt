@@ -1,2 +1,0 @@
-[console_scripts]
-agent-game-dev = agentic_game_dev.cli:main
