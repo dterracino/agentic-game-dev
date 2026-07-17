@@ -36,6 +36,8 @@ class RunJournal:
         renderer: str,
         repair_attempts: int,
         smoke_timeout: float,
+        design_iterations: int = 1,
+        implementation_iterations: int = 0,
     ) -> "RunJournal":
         journal = cls(
             root,
@@ -50,6 +52,8 @@ class RunJournal:
                 "renderer": renderer,
                 "repair_attempts": repair_attempts,
                 "smoke_timeout": smoke_timeout,
+                "design_iterations": design_iterations,
+                "implementation_iterations": implementation_iterations,
                 "tasks": {},
                 "last_error": None,
             },
@@ -102,6 +106,7 @@ class RunJournal:
         task = self.state.setdefault("tasks", {}).setdefault(name, {})
         task["artifact"] = artifact
         self._save()
+
     def complete_task(self, name: str, artifact: str | None = None) -> None:
         task = self.state.setdefault("tasks", {}).setdefault(name, {})
         task.update({"status": "complete", "completed_at": _now(), "error": None})

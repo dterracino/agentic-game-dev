@@ -19,6 +19,20 @@ from .workspace import GameWorkspace, WorkspaceError
 DEFAULT_MODEL = "claude-sonnet-5"
 
 
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
+def _nonnegative_int(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be at least 0")
+    return number
+
+
 def _load_environment() -> None:
     try:
         from dotenv import load_dotenv
@@ -50,6 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
     create = subparsers.add_parser("create", help="Design and generate a new game")
     create.add_argument("brief", nargs="?", help="Game description; prompted for when omitted")
     create.add_argument("--replace", action="store_true", help="Replace a non-empty output directory")
+    create.add_argument(
+        "--design-iterations",
+        type=_positive_int,
+        default=1,
+        help="Total design passes before architecture (default: 1)",
+    )
+    create.add_argument(
+        "--implementation-iterations",
+        type=_nonnegative_int,
+        default=0,
+        help="Review-and-improve rounds after initial implementation (default: 0)",
+    )
     create.add_argument("--run", action="store_true", help="Run generated code after validation")
 
     resume = subparsers.add_parser("resume", help="Continue an interrupted generated game")
@@ -114,6 +140,12 @@ async def _execute(args: argparse.Namespace) -> int:
             renderer=args.renderer,
             repair_attempts=max(0, args.repair_attempts),
             smoke_timeout=max(1.0, args.smoke_timeout),
+            design_iterations=(
+                max(1, args.design_iterations) if args.command == "create" else 1
+            ),
+            implementation_iterations=(
+                max(0, args.implementation_iterations) if args.command == "create" else 0
+            ),
             environment=game_environment,
             dependency_approver=approver,
             progress=progress,

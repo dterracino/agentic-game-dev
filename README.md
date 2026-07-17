@@ -2,7 +2,7 @@
 
 Agentic Game Dev coordinates designer, architect, implementation, and review agents to build a complete Pygame game. Runs are checkpointed, resumable, dependency-aware, and isolated from the coordinator's Python environment.
 
-The current release intentionally uses one planning round while the new recovery lifecycle is proven. Multi-round design iteration is the next layer, not part of this release.
+The generator supports checkpointed design passes before architecture and checkpointed implementation review-and-improvement rounds after the initial build.
 
 ## Core behavior
 
@@ -18,6 +18,7 @@ The current release intentionally uses one planning round while the new recovery
 - Validation and gameplay use the generated game's interpreter.
 - Missing imports pause for dependency approval before code is rewritten.
 - Review responses and source replacements are checkpointed.
+- Design and implementation rounds use namespaced artifacts and resume at the unfinished task.
 - Generated code never runs unless --run is explicit.
 
 Checkpoints live under generated_game/.agentic. The run journal records stages, task status, model, renderer, errors, and artifact locations. It never stores the API key.
@@ -49,6 +50,14 @@ Global options go before the command:
 ~~~powershell
 agent-game-dev --output generated_game create "A neon arena game where movement paints temporary walls"
 ~~~
+
+To iterate on both the design and its implementation:
+
+~~~powershell
+agent-game-dev --output generated_game create "A Qix clone" --design-iterations 3 --implementation-iterations 2
+~~~
+
+--design-iterations is the total number of design passes before architecture and must be at least 1. --implementation-iterations is the number of review-and-improve rounds after the initial implementation and may be 0. Each implementation round uses gameplay/completeness and technical reviews based on the brief, final contract, complete source, and validation output. It does not claim to visually play the game.
 
 Before packages are installed, the CLI shows each requirement and asks for approval. The resulting layout includes:
 
