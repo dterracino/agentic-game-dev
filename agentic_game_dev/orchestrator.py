@@ -182,6 +182,9 @@ PATCH_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+FILE_GENERATION_ATTEMPTS = 3
+
+
 DESIGNER_ROLE = """You are the lead game designer on a tiny expert team. Design a focused,
 replayable game with a clear 30-second loop, meaningful decisions, fair escalation, readable
 controls, and satisfying feedback. Scope it so one developer can implement it well. All visual
@@ -725,7 +728,14 @@ class GameBuilder:
         result = journal.read_json_artifact(artifact)
         if result.get("filename") != spec.name:
             raise WorkspaceError(f"Corrupt iteration checkpoint for {spec.name}")
-        self.workspace.write_python(spec.name, str(result["content"]))
+        try:
+            self.workspace.write_python(spec.name, str(result["content"]))
+        except SyntaxError as exc:
+            self.progress(
+                f"    Ignoring invalid round {round_number} checkpoint "
+                f"for {spec.name}: {exc}"
+            )
+            return False
         if not journal.task_complete(task_name):
             journal.complete_task(task_name, artifact)
         self.progress(f"    Reusing checkpoint: round {round_number} {spec.name}")
@@ -741,39 +751,21 @@ class GameBuilder:
         technical_review: str,
         snapshot: str,
     ) -> str:
-        journal = self._journal()
         task_name = f"iteration:{round_number:03d}:file:{spec.name}"
-        journal.start_task(task_name)
-        try:
-            result = await self.provider.structured(
-                role=IMPLEMENTER_ROLE,
-                prompt=(
-                    f"Updated complete plan:\n{plan.as_context()}\n\n"
-                    f"Gameplay review:\n{gameplay_review}\n\nTechnical review:\n"
-                    f"{technical_review}\n\nComplete project before this round:\n{snapshot}\n\n"
-                    f"Your assigned file: {spec.name}\nReason for change: {reason}\n"
-                    f"Purpose: {spec.purpose}\nRequired public API: "
-                    f"{', '.join(spec.public_api) or 'none'}\nReturn the complete revised file, "
-                    "integrated with both the current project and updated contract."
-                ),
-                tool_name="submit_python_file",
-                description="Submit one complete revised or newly added Python source file.",
-                schema=FILE_SCHEMA,
-            )
-            if result["filename"] != spec.name:
-                raise WorkspaceError(
-                    f"Implementer returned {result['filename']!r}; expected {spec.name!r}"
-                )
-            artifact = journal.write_json_artifact(
-                f"iterations/{round_number:03d}/files/{spec.name}.json", result
-            )
-            journal.set_task_artifact(task_name, artifact)
-            self.workspace.write_python(spec.name, str(result["content"]))
-            journal.complete_task(task_name, artifact)
-            return spec.name
-        except BaseException as exc:
-            journal.fail_task(task_name, exc)
-            raise
+        return await self._generate_valid_python_checkpoint(
+            task_name=task_name,
+            artifact_name=f"iterations/{round_number:03d}/files/{spec.name}.json",
+            spec=spec,
+            prompt=(
+                f"Updated complete plan:\n{plan.as_context()}\n\n"
+                f"Gameplay review:\n{gameplay_review}\n\nTechnical review:\n"
+                f"{technical_review}\n\nComplete project before this round:\n{snapshot}\n\n"
+                f"Your assigned file: {spec.name}\nReason for change: {reason}\n"
+                f"Purpose: {spec.purpose}\nRequired public API: "
+                f"{', '.join(spec.public_api) or 'none'}\nReturn the complete revised file, "
+                "integrated with both the current project and updated contract."
+            ),
+        )
 
     def _project_snapshot(self) -> str:
         return "\n\n".join(
@@ -938,7 +930,11 @@ class GameBuilder:
         result = journal.read_json_artifact(artifact)
         if result.get("filename") != spec.name:
             raise WorkspaceError(f"Corrupt file checkpoint for {spec.name}")
-        self.workspace.write_python(spec.name, str(result["content"]))
+        try:
+            self.workspace.write_python(spec.name, str(result["content"]))
+        except SyntaxError as exc:
+            self.progress(f"  Ignoring invalid checkpoint for {spec.name}: {exc}")
+            return False
         if not journal.task_complete(task_name):
             journal.complete_task(task_name, artifact)
         self.progress(f"  Reusing checkpoint: {spec.name}")
@@ -950,39 +946,78 @@ class GameBuilder:
         plan: GamePlan,
         qa_contract: str,
     ) -> str:
-        journal = self._journal()
         task_name = f"file:{spec.name}"
+        return await self._generate_valid_python_checkpoint(
+            task_name=task_name,
+            artifact_name=f"files/{spec.name}.json",
+            spec=spec,
+            prompt=(
+                f"Complete plan:\n{plan.as_context()}\n\n"
+                f"Approved QA contract:\n{qa_contract}\n\n"
+                "Project implemented so far:\n"
+                f"{self._project_snapshot() or '(no files yet)'}\n\n"
+                f"Your current checkpoint file: {spec.name}\n"
+                f"Your assigned file: {spec.name}\nPurpose: {spec.purpose}\n"
+                f"Required public API: {', '.join(spec.public_api) or 'none'}\n"
+                "Implement this file as the lead developer. Keep all existing and future "
+                "cross-file contracts coherent and satisfy the approved QA criteria."
+            ),
+        )
+
+    async def _generate_valid_python_checkpoint(
+        self,
+        *,
+        task_name: str,
+        artifact_name: str,
+        spec: FileSpec,
+        prompt: str,
+    ) -> str:
+        journal = self._journal()
         journal.start_task(task_name)
+        retry_context = ""
         try:
-            result = await self.provider.structured(
-                role=IMPLEMENTER_ROLE,
-                prompt=(
-                    f"Complete plan:\n{plan.as_context()}\n\n"
-                    f"Approved QA contract:\n{qa_contract}\n\n"
-                    "Project implemented so far:\n"
-                    f"{self._project_snapshot() or '(no files yet)'}\n\n"
-                    f"Your current checkpoint file: {spec.name}\n"
-                    f"Your assigned file: {spec.name}\nPurpose: {spec.purpose}\n"
-                    f"Required public API: {', '.join(spec.public_api) or 'none'}\n"
-                    "Implement this file as the lead developer. Keep all existing and future "
-                    "cross-file contracts coherent and satisfy the approved QA criteria."
-                ),
-                tool_name="submit_python_file",
-                description="Submit the complete source for the assigned Python file.",
-                schema=FILE_SCHEMA,
-            )
-            if result["filename"] != spec.name:
-                raise WorkspaceError(
-                    f"Implementer returned {result['filename']!r}; expected {spec.name!r}"
+            for attempt in range(1, FILE_GENERATION_ATTEMPTS + 1):
+                result = await self.provider.structured(
+                    role=IMPLEMENTER_ROLE,
+                    prompt=prompt + retry_context,
+                    tool_name="submit_python_file",
+                    description="Submit one complete validated Python source file.",
+                    schema=FILE_SCHEMA,
                 )
-            artifact = journal.write_json_artifact(f"files/{spec.name}.json", result)
-            journal.set_task_artifact(task_name, artifact)
-            self.workspace.write_python(spec.name, str(result["content"]))
-            journal.complete_task(task_name, artifact)
-            return spec.name
+                try:
+                    if result["filename"] != spec.name:
+                        raise WorkspaceError(
+                            f"Implementer returned {result['filename']!r}; "
+                            f"expected {spec.name!r}"
+                        )
+                    self.workspace.write_python(spec.name, str(result["content"]))
+                except (SyntaxError, WorkspaceError) as exc:
+                    failed = dict(result)
+                    failed["validation_error"] = str(exc)
+                    stem = artifact_name.removesuffix(".json")
+                    journal.write_json_artifact(
+                        f"{stem}.failed_{attempt:02d}.json", failed
+                    )
+                    if attempt >= FILE_GENERATION_ATTEMPTS:
+                        raise
+                    self.progress(
+                        f"    {spec.name} failed source validation: {exc}. "
+                        f"Retrying ({attempt + 1}/{FILE_GENERATION_ATTEMPTS})..."
+                    )
+                    retry_context = (
+                        "\n\nYour previous response failed local Python source validation.\n"
+                        f"Validation error: {exc}\n\nPrevious invalid source:\n"
+                        f"{result.get('content', '')}\n\nReturn a corrected complete file."
+                    )
+                    continue
+                artifact = journal.write_json_artifact(artifact_name, result)
+                journal.set_task_artifact(task_name, artifact)
+                journal.complete_task(task_name, artifact)
+                return spec.name
         except BaseException as exc:
             journal.fail_task(task_name, exc)
             raise
+        raise WorkspaceError(f"File generation exhausted attempts for {spec.name}")
 
     def _ensure_environment(
         self,

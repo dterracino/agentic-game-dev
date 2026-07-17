@@ -19,6 +19,8 @@ This keeps SoC in the generated project without assigning tightly coupled gamepl
 
 Every model request displays an ASCII-safe spinner with elapsed time in an interactive terminal. Redirected output receives a plain waiting message instead.
 
+Generated Python files are parsed immediately. A syntax-invalid response is saved as a diagnostic attempt and returned to the lead for up to three file-local attempts without consuming the later project repair budget.
+
 ## Setup
 
 Python 3.11 or newer is recommended.

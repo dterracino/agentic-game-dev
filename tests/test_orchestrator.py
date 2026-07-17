@@ -38,11 +38,14 @@ class FakeProvider:
         *,
         fail_file_once: str | None = None,
         fail_iteration_once: bool = False,
+        syntax_error_once: str | None = None,
     ) -> None:
         self.fail_file_once = fail_file_once
         self.fail_iteration_once = fail_iteration_once
+        self.syntax_error_once = syntax_error_once
         self.failed = False
         self.iteration_failed = False
+        self.syntax_failed = False
         self.calls: Counter[str] = Counter()
         self.game_saw_main_checkpoint = False
         self.files = {
@@ -151,6 +154,12 @@ class FakeProvider:
             if name == self.fail_file_once and not self.failed:
                 self.failed = True
                 raise RuntimeError(f"simulated failure for {name}")
+            if name == self.syntax_error_once and not self.syntax_failed:
+                self.syntax_failed = True
+                return {
+                    "filename": name,
+                    "content": "def broken():\n    global first,\n    second\n",
+                }
             content = self.files[name]
             if is_iteration and name == "game.py":
                 content = "class Game:\n    improved = True\n"
@@ -245,6 +254,81 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(resumed.ok, resumed.report)
             self.assertEqual(second.calls["submit_qa_contract"], 0)
             self.assertTrue(RunJournal.load(workspace.root).state["qa_approved"])
+    async def test_invalid_python_is_retried_with_diagnostic_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            environment = FakeEnvironment()
+            provider = FakeProvider(syntax_error_once="game.py")
+            messages: list[str] = []
+
+            result = await make_builder(
+                provider, workspace, environment, messages
+            ).create("A small game")
+
+            self.assertTrue(result.ok, result.report)
+            self.assertEqual(provider.calls["file:game.py"], 2)
+            failed_path = (
+                workspace.root
+                / ".agentic"
+                / "artifacts"
+                / "files"
+                / "game.py.failed_01.json"
+            )
+            self.assertTrue(failed_path.is_file())
+            failed = json.loads(failed_path.read_text(encoding="utf-8"))
+            self.assertIn("invalid syntax", failed["validation_error"])
+            self.assertTrue(
+                any("game.py failed source validation" in message for message in messages)
+            )
+            state = RunJournal.load(workspace.root).state
+            self.assertEqual(state["tasks"]["file:game.py"]["status"], "complete")
+            self.assertEqual(
+                state["tasks"]["file:game.py"]["artifact"],
+                "artifacts/files/game.py.json",
+            )
+
+    async def test_failed_legacy_artifact_is_ignored_and_regenerated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(False)
+            environment = FakeEnvironment()
+            provider = FakeProvider()
+            builder = make_builder(provider, workspace, environment, [])
+            builder.journal = RunJournal.create(
+                workspace.root,
+                brief="test",
+                model=provider.model,
+                renderer="pygame",
+                repair_attempts=0,
+                smoke_timeout=0.05,
+            )
+            spec = FileSpec("game.py", "Game state", ["Game"])
+            task_name = "file:game.py"
+            builder.journal.start_task(task_name)
+            artifact = builder.journal.write_json_artifact(
+                "files/game.py.json",
+                {
+                    "filename": "game.py",
+                    "content": "def broken():\n    global first,\n    second\n",
+                },
+            )
+            builder.journal.set_task_artifact(task_name, artifact)
+            builder.journal.fail_task(task_name, "invalid syntax (game.py, line 2)")
+
+            self.assertFalse(builder._restore_completed_file(spec))
+            plan = GamePlan(
+                title="Test",
+                pitch="Test",
+                core_loop=["move", "decide", "score"],
+                controls=["Arrows"],
+                quality_bar=["clear", "fair", "responsive", "complete"],
+                files=[spec],
+            )
+            await builder._generate_file_checkpoint(spec, plan, "Approved QA")
+
+            self.assertEqual(provider.calls["file:game.py"], 1)
+            self.assertIn("class Game", (workspace.root / "game.py").read_text())
+            self.assertTrue(builder.journal.task_complete(task_name))
     async def test_resume_reuses_paid_calls_and_completed_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")
