@@ -32,12 +32,14 @@ class State(Protocol):
     """Contract that every game state must fulfill.
 
     The StateMachine drives a State by calling, in order each frame:
-      1. handle_events(events, ctx)
-      2. update(dt, ctx)
+      1. handle_events(ctx, events)
+      2. update(ctx, dt)
       3. render(ctx)
       4. next(ctx) -> to determine whether/how to transition
 
-    on_enter/on_exit bracket the lifetime of a state within the machine.
+    on_enter(ctx)/on_exit(ctx) bracket the lifetime of a state within the
+    machine. All methods take `ctx` as an explicit argument (matching the
+    concrete implementations in states/*.py).
     """
 
     def on_enter(self, ctx: GameContext) -> None:
@@ -48,11 +50,11 @@ class State(Protocol):
         """Called once when this state stops being the active state."""
         ...
 
-    def handle_events(self, events: List[object], ctx: GameContext) -> None:
+    def handle_events(self, ctx: GameContext, events: List[object]) -> None:
         """Process a batch of raw pygame events (or compatible objects)."""
         ...
 
-    def update(self, dt: float, ctx: GameContext) -> None:
+    def update(self, ctx: GameContext, dt: float) -> None:
         """Advance state logic by dt seconds (already clamped)."""
         ...
 

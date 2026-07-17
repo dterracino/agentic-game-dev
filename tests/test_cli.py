@@ -28,6 +28,16 @@ class CliEnvironmentTests(unittest.TestCase):
         self.assertEqual(args.design_iterations, 3)
         self.assertEqual(args.implementation_iterations, 2)
 
+    def test_resume_parses_additional_repair_budget(self) -> None:
+        args = build_parser().parse_args(["resume", "--add-repair-attempts", "2"])
+
+        self.assertEqual(args.add_repair_attempts, 2)
+
+    def test_run_command_parses_without_iteration_options(self) -> None:
+        args = build_parser().parse_args(["--output", "game", "run"])
+
+        self.assertEqual(args.command, "run")
+
     def test_create_rejects_invalid_iteration_counts(self) -> None:
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["create", "A game", "--design-iterations", "0"])

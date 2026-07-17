@@ -8,8 +8,7 @@ moderngl types directly beyond what is exposed through GameContext/Renderer.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from core.game_context import GameContext
 from core.input import InputState
@@ -18,7 +17,7 @@ from states.base import StateID, State
 from gamelib.board import Board
 from gamelib.player import Player
 from gamelib.enemies import QixEnemy
-from gamelib.sparx import Sparx
+from gamelib.sparx import Sparx, SparxSquad
 from gamelib.scoring import ScoreBoard
 
 import settings
@@ -35,60 +34,35 @@ def _make_default_border() -> List[tuple]:
     ]
 
 
-@dataclass
 class PlayingState:
     """Runs one round of the core gameplay loop."""
 
-    ctx: GameContext
-    _next: Optional[StateID] = field(default=None, init=False)
-
-    board: Board = field(init=False)
-    player: Player = field(init=False)
-    qix: QixEnemy = field(init=False)
-    sparx_list: List[Sparx] = field(init=False, default_factory=list)
-    scoreboard: ScoreBoard = field(init=False)
-
-    level: int = field(default=1, init=False)
-    _time_in_level: float = field(default=0.0, init=False)
-    _paused_requested: bool = field(default=False, init=False)
-    _dead: bool = field(default=False, init=False)
-
     def __init__(self, ctx: GameContext) -> None:
         self.ctx = ctx
-        self._next = None
+        self._next: Optional[StateID] = None
         self.level = 1
         self._time_in_level = 0.0
         self._paused_requested = False
         self._dead = False
+        self.scoreboard = ScoreBoard()
         self._reset_level()
 
     def _reset_level(self) -> None:
         border = _make_default_border()
-        self.board = Board(border=border)
+        self.board = Board(width=settings.WINDOW_SIZE[0], height=settings.WINDOW_SIZE[1], border=border)
         cx = (border[0][0] + border[2][0]) / 2.0
         top_y = border[0][1]
-        self.player = Player(position=(cx, top_y))
+        self.player = Player(pos=(cx, top_y))
 
         w, h = settings.WINDOW_SIZE
-        qix_speed = settings.BASE_QIX_SPEED * (1.0 + 0.15 * (self.level - 1))
+        qix_speed = settings.BASE_QIX_SPEED * (1.0 + settings.QIX_SPEED_LEVEL_SCALE * (self.level - 1))
         self.qix = QixEnemy(
             position=(w / 2.0, h / 2.0),
-            speed=qix_speed,
             level=self.level,
         )
 
-        sparx_count = 1 + (self.level - 1) // 2
-        self.sparx_list = []
-        border_len = max(1, len(self.board.border))
-        for i in range(sparx_count):
-            t = i / float(sparx_count)
-            sparx_speed = settings.BASE_SPARX_SPEED * (1.0 + 0.1 * (self.level - 1))
-            self.sparx_list.append(
-                Sparx(border_position=t, speed=sparx_speed, level=self.level)
-            )
-
-        if not hasattr(self, "scoreboard"):
-            self.scoreboard = ScoreBoard()
+        self.sparx_squad = SparxSquad(base_speed=settings.BASE_SPARX_SPEED, base_count=settings.BASE_SPARX_COUNT)
+        self.sparx_squad.escalate(self.level)
 
         self._time_in_level = 0.0
         self._dead = False
@@ -97,21 +71,23 @@ class PlayingState:
 
     # --- State protocol -------------------------------------------------
 
-    def on_enter(self) -> None:
+    def on_enter(self, ctx: GameContext) -> None:
         pass
 
-    def on_exit(self) -> None:
+    def on_exit(self, ctx: GameContext) -> None:
         pass
 
-    def handle_events(self, events: list) -> None:
+    def handle_events(self, ctx: GameContext, events: List[Any]) -> None:
         # Actual pygame event -> InputState translation happens in core.input
         # and is applied via update(); pause key handling is derived from
         # the InputState passed to update as well, so nothing to do here.
         pass
 
-    def update(self, dt: float, input_state: InputState) -> None:
+    def update(self, ctx: GameContext, dt: float) -> None:
         if self._dead:
             return
+
+        input_state: InputState = ctx.input_state
 
         if input_state.pause_toggled:
             self._paused_requested = True
@@ -123,16 +99,17 @@ class PlayingState:
 
         self.player.update(dt, input_state, self.board)
         self.qix.update(dt, self.board)
-
-        for sparx in self.sparx_list:
-            sparx.update(dt, self.board)
+        self.sparx_squad.update(dt, self.board)
 
         self._check_collisions()
 
         if not self._dead:
             percent = self.board.percent_claimed()
+            ctx.percent_claimed = percent
+            ctx.score = self.scoreboard.score
             if percent >= target:
                 self.level += 1
+                ctx.level = self.level
                 self._reset_level()
 
         if self.scoreboard.lives <= 0:
@@ -145,7 +122,7 @@ class PlayingState:
         return targets[idx]
 
     def _check_collisions(self) -> None:
-        px, py = self.player.position
+        px, py = self.player.pos
         kill_radius = 10.0
 
         qx, qy = self.qix.position
@@ -153,17 +130,17 @@ class PlayingState:
             self._on_player_death()
             return
 
-        for sparx in self.sparx_list:
+        for sparx in self.sparx_squad.sparx_list:
             sx, sy = sparx.position
             if (px - sx) ** 2 + (py - sy) ** 2 <= kill_radius ** 2:
-                if self.player.is_drawing():
+                if self.player.drawing:
                     self._on_player_death()
                     return
 
     def _on_player_death(self) -> None:
         self._dead = True
-        self.scoreboard.lives -= 1
-        if self.scoreboard.lives > 0:
+        alive = self.scoreboard.lose_life()
+        if alive:
             self._respawn()
         else:
             self._next = StateID.GAME_OVER
@@ -173,36 +150,37 @@ class PlayingState:
         border = self.board.border
         cx = (border[0][0] + border[2][0]) / 2.0
         top_y = border[0][1]
-        self.player = Player(position=(cx, top_y))
+        self.player = Player(pos=(cx, top_y))
         self._dead = False
 
-    def render(self) -> None:
-        renderer = self.ctx.renderer
+    def render(self, ctx: GameContext) -> None:
+        renderer = ctx.renderer
         renderer.begin_frame()
 
         renderer.draw_border(list(self.board.border))
 
-        tris: List[tuple] = []
         for poly in self.board.claimed_polygons:
-            tris.extend(poly)
-        if tris:
-            renderer.draw_claimed_area(tris)
+            if len(poly) >= 3:
+                from gamelib.polygon_fill import triangulate
+                tris = triangulate(poly)
+                if tris:
+                    renderer.draw_claimed_area(tris)
 
         if self.board.active_trail:
             renderer.draw_trail(list(self.board.active_trail))
 
         renderer.draw_marker(
-            self.player.position, 6.0, settings.PLAYER_COLOR
+            self.player.pos, 6.0, settings.COLOR_PLAYER
         )
         renderer.draw_marker(
-            self.qix.position, 12.0, settings.QIX_COLOR
+            self.qix.position, 12.0, settings.COLOR_QIX
         )
-        for sparx in self.sparx_list:
-            renderer.draw_marker(sparx.position, 8.0, settings.SPARX_COLOR)
+        for sparx in self.sparx_squad.sparx_list:
+            renderer.draw_marker(sparx.position, 8.0, settings.COLOR_SPARX)
 
         renderer.end_frame()
 
-    def next(self) -> Optional[StateID]:
+    def next(self, ctx: GameContext) -> Optional[StateID]:
         if self._next is not None:
             result = self._next
             self._next = None

@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: agentic-game-dev
-Version: 2.1.0
+Version: 2.3.0
 Summary: A resumable agent team for generating isolated Pygame games
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
@@ -14,21 +14,24 @@ Requires-Dist: mypy>=1.15; extra == "dev"
 
 Agentic Game Dev coordinates designer, architect, implementation, and review agents to build a complete Pygame game. Runs are checkpointed, resumable, dependency-aware, and isolated from the coordinator's Python environment.
 
-The current release intentionally uses one planning round while the new recovery lifecycle is proven. Multi-round design iteration is the next layer, not part of this release.
+The generator supports checkpointed design passes before architecture and checkpointed implementation review-and-improvement rounds after the initial build.
 
 ## Core behavior
 
 - Designer and architect proposals are checkpointed independently.
+- Adaptive-thinking models use medium effort with enough output headroom for a final answer.
 - The final plan declares exact file APIs and every third-party dependency.
 - A requirements.txt file is written before dependency approval.
 - Each game receives its own .venv.
 - The coordinator asks before installing structured dependencies by default.
 - Every successful implementation response is written immediately.
+- Plans have no fixed file-count cap; responsibilities determine project structure.
 - Interrupted runs resume only missing or failed work.
-- Validation and gameplay use the generated game's interpreter.
+- Static compilation, timed runtime validation, and gameplay use the generated game's interpreter.
 - Missing imports pause for dependency approval before code is rewritten.
 - Review responses and source replacements are checkpointed.
-- Generated code never runs unless --run is explicit.
+- Design and implementation rounds use namespaced artifacts and resume at the unfinished task.
+- Validation launches main.main() for a bounded smoke interval; full interactive play remains explicit.
 
 Checkpoints live under generated_game/.agentic. The run journal records stages, task status, model, renderer, errors, and artifact locations. It never stores the API key.
 
@@ -59,6 +62,14 @@ Global options go before the command:
 ~~~powershell
 agent-game-dev --output generated_game create "A neon arena game where movement paints temporary walls"
 ~~~
+
+To iterate on both the design and its implementation:
+
+~~~powershell
+agent-game-dev --output generated_game create "A Qix clone" --design-iterations 3 --implementation-iterations 2
+~~~
+
+--design-iterations is the total number of design passes before architecture and must be at least 1. --implementation-iterations is the number of review-and-improve rounds after the initial implementation and may be 0. Each implementation round uses gameplay/completeness and technical reviews based on the brief, final contract, complete source, and validation output. It does not claim to visually play the game.
 
 Before packages are installed, the CLI shows each requirement and asks for approval. The resulting layout includes:
 
@@ -95,13 +106,13 @@ If a previous project predates run journals, it cannot be resumed; use create --
 
 ## Run and refine
 
-A completed game can be launched explicitly:
+A completed game can be launched explicitly while teeing stdout and errors to .agentic/playtest.log:
 
 ~~~powershell
-generated_game\.venv\Scripts\python.exe generated_game\main.py
+agent-game-dev --output generated_game run
 ~~~
 
-Or add --run to create or resume.
+You can also add --run to create or resume. The bounded validator may briefly open a game window. Every automated launch appends its status and captured output to .agentic/runtime.log. Runtime and playtest log tails are supplied to repair and implementation-review agents. Generated entry points are required to log uncaught failures to game.log without converting exceptions into successful exits.
 
 Apply playtest feedback with:
 
@@ -116,11 +127,11 @@ agent-game-dev --output generated_game refine "Hits need stronger feedback"
 --output DIRECTORY
 --renderer pygame|moderngl
 --repair-attempts N
---smoke-timeout SECONDS
+--smoke-timeout SECONDS  (game must remain active for this launch interval)
 --dependency-policy ask|allow|never
 ~~~
 
-The CLI prints the effective model, output, renderer, repair budget, and game interpreter before work begins.
+The CLI prints the effective model, output, renderer, iteration counts, repair budget, and game interpreter before work begins.
 
 ## Safety
 

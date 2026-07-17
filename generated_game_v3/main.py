@@ -25,15 +25,6 @@ from render.gl_context import create_context
 from render.renderer import Renderer
 
 
-def _build_states() -> dict:
-    return {
-        StateID.MENU: MenuState(),
-        StateID.PLAYING: PlayingState(),
-        StateID.PAUSED: PausedState(),
-        StateID.GAME_OVER: GameOverState(),
-    }
-
-
 def main() -> None:
     pygame.init()
     try:
@@ -43,25 +34,26 @@ def main() -> None:
             pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE
         )
 
-        surface = pygame.display.set_mode(
-            WINDOW_SIZE, pygame.OPENGL | pygame.DOUBLEBUF
-        )
+        gl_ctx = create_context(WINDOW_SIZE)
         pygame.display.set_caption("Qix Clone: Ink & Exposure")
 
-        clock = pygame.time.Clock()
-
-        gl_ctx = create_context(WINDOW_SIZE)
         renderer = Renderer(gl_ctx, WINDOW_SIZE)
 
         context = GameContext(
-            gl_ctx=gl_ctx,
             renderer=renderer,
             window_size=WINDOW_SIZE,
         )
 
-        states = _build_states()
-        machine = StateMachine(states, StateID.MENU, context)
-        machine.current.on_enter(context)
+        clock = pygame.time.Clock()
+
+        state_factories = {
+            StateID.MENU: lambda ctx: MenuState(ctx),
+            StateID.PLAYING: lambda ctx: PlayingState(ctx),
+            StateID.PAUSED: lambda ctx: PausedState(ctx, None),
+            StateID.GAME_OVER: lambda ctx: GameOverState(ctx),
+        }
+
+        machine = StateMachine(context, state_factories, StateID.MENU)
 
         running = True
         while running:
@@ -69,15 +61,13 @@ def main() -> None:
             dt = clamp_dt(raw_dt)
 
             events = pygame.event.get()
-            for event in events:
-                if event.type == pygame.QUIT:
-                    running = False
-
-            if not running:
-                break
 
             input_state = poll(events)
             context.input_state = input_state
+
+            if input_state.quit_requested:
+                running = False
+                break
 
             machine.handle_events(events)
             machine.update(dt)
@@ -85,12 +75,11 @@ def main() -> None:
 
             pygame.display.flip()
 
-            if machine.should_quit():
+            if not context.running:
                 running = False
 
     finally:
         pygame.quit()
-        sys.exit(0)
 
 
 if __name__ == "__main__":

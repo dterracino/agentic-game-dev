@@ -12,7 +12,7 @@ from persistence.highscores import save_highscore
 class GameOverState:
     """Displays final results, persists a high score entry, and waits for confirm."""
 
-    def __init__(self) -> None:
+    def __init__(self, ctx: GameContext) -> None:
         self._next: Optional[StateID] = None
         self._final_score: int = 0
         self._final_percent: float = 0.0
@@ -29,7 +29,7 @@ class GameOverState:
         scoreboard = getattr(ctx, "scoreboard", None)
         if scoreboard is not None:
             score = getattr(scoreboard, "score", score)
-            percent = getattr(scoreboard, "percent_claimed", percent)
+            percent = getattr(scoreboard, "total_percent_claimed", percent)
 
         self._final_score = int(score)
         self._final_percent = float(percent)
@@ -37,7 +37,8 @@ class GameOverState:
         if not self._saved:
             entry = {
                 "score": self._final_score,
-                "percent_claimed": self._final_percent,
+                "area_percent": self._final_percent,
+                "level": getattr(ctx, "level", 1),
             }
             try:
                 save_highscore(entry)
@@ -50,6 +51,9 @@ class GameOverState:
         pass
 
     def handle_events(self, ctx: GameContext, events: List[Any]) -> None:
+        pass
+
+    def update(self, ctx: GameContext, dt: float) -> None:
         input_state = getattr(ctx, "input_state", None)
         confirm = False
 
@@ -59,22 +63,20 @@ class GameOverState:
         if confirm:
             self._next = StateID.MENU
 
-    def update(self, ctx: GameContext, dt: float) -> None:
-        pass
-
     def render(self, ctx: GameContext) -> None:
         renderer = getattr(ctx, "renderer", None)
         if renderer is None:
             return
 
         renderer.begin_frame()
-        # This state has no dynamic geometry of its own beyond what the
-        # renderer's higher-level UI drawing (if any) handles; markers are
-        # used here as a minimal, dependency-free way to signal state.
-        renderer.draw_marker((0.0, 0.0), 0.0, (0.0, 0.0, 0.0))
+        width, height = ctx.window_size
+        center = (width / 2.0, height / 2.0)
+        # Minimal, dependency-free way to signal state until text rendering
+        # is added: draw a marker sized/colored by outcome.
+        renderer.draw_marker(center, 20.0, (1.0, 0.2, 0.2, 1.0))
         renderer.end_frame()
 
-    def next(self) -> Optional[StateID]:
+    def next(self, ctx: GameContext) -> Optional[StateID]:
         result = self._next
         self._next = None
         return result

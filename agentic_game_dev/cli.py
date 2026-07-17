@@ -79,7 +79,15 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--run", action="store_true", help="Run generated code after validation")
 
     resume = subparsers.add_parser("resume", help="Continue an interrupted generated game")
+    resume.add_argument(
+        "--add-repair-attempts",
+        type=_nonnegative_int,
+        default=0,
+        help="Extend the saved repair budget before resuming",
+    )
     resume.add_argument("--run", action="store_true", help="Run the game after completion")
+
+    subparsers.add_parser("run", help="Run an existing game and append output to its playtest log")
 
     refine = subparsers.add_parser("refine", help="Apply playtest feedback to an existing game")
     refine.add_argument("feedback", nargs="?", help="Feedback; prompted for when omitted")
@@ -111,15 +119,24 @@ def _dependency_approver(policy: str):
 
 
 async def _execute(args: argparse.Namespace) -> int:
-    _require_api_key()
     workspace = GameWorkspace(args.output)
     progress = print
     game_environment = GameEnvironment(workspace.root, progress=progress)
+    if args.command == "run":
+        if not (workspace.root / "main.py").is_file():
+            raise WorkspaceError(f"No generated game with main.py found at: {workspace.root}")
+        print(f"Running game; output log: {workspace.root / '.agentic' / 'playtest.log'}")
+        return run_game(workspace.root, game_environment.python)
+
+    _require_api_key()
     approver = _dependency_approver(args.dependency_policy)
 
     if args.command == "resume":
         workspace.prepare_resume()
-        saved = RunJournal.load(workspace.root).state
+        saved_journal = RunJournal.load(workspace.root)
+        if args.add_repair_attempts:
+            saved_journal.add_repair_attempts(args.add_repair_attempts)
+        saved = saved_journal.state
         provider = ClaudeProvider(str(saved["model"]))
         builder = GameBuilder(
             provider,
@@ -168,7 +185,7 @@ async def _execute(args: argparse.Namespace) -> int:
     if args.run:
         print("Running generated code with the game environment.")
         return run_game(workspace.root, game_environment.python)
-    print(f"Run it with: {game_environment.python} {workspace.root / 'main.py'}")
+    print(f"Run it with: agent-game-dev --output {workspace.root} run")
     return 0
 
 

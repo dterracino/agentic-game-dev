@@ -33,6 +33,19 @@ class InputState:
     confirm_pressed: bool = False
     quit_requested: bool = False
 
+    # Backwards/forwards-compatible aliases used by some states.
+    @property
+    def confirm(self) -> bool:
+        return self.confirm_pressed
+
+    @property
+    def quit(self) -> bool:
+        return self.quit_requested
+
+    @property
+    def pause_toggled(self) -> bool:
+        return self.pause_pressed
+
 
 def poll(events: list) -> InputState:
     """Translate a list of pygame events (plus current key state) into an

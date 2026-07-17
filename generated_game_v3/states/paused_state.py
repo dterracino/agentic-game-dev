@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Any
 
 import pygame
 
@@ -13,11 +13,13 @@ from states.base import State, StateID
 class PausedState:
     """Freezes gameplay update, renders a paused overlay, resumes on input."""
 
-    def __init__(self, ctx: GameContext, previous_state: State) -> None:
-        self._ctx = ctx
+    def __init__(self, ctx: GameContext, previous_state: Optional[State] = None) -> None:
         self._previous_state = previous_state
         self._next_id: Optional[StateID] = None
         self._resume = False
+
+    def set_previous_state(self, previous_state: State) -> None:
+        self._previous_state = previous_state
 
     def on_enter(self, ctx: GameContext) -> None:
         self._next_id = None
@@ -26,11 +28,8 @@ class PausedState:
     def on_exit(self, ctx: GameContext) -> None:
         pass
 
-    def handle_events(self, ctx: GameContext, events: List[pygame.event.Event]) -> None:
+    def handle_events(self, ctx: GameContext, events: List[Any]) -> None:
         for event in events:
-            if event.type == pygame.QUIT:
-                self._next_id = StateID.MENU
-                return
             if event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE, pygame.K_p):
                     self._resume = True
@@ -43,11 +42,12 @@ class PausedState:
             self._next_id = StateID.PLAYING
 
     def render(self, ctx: GameContext) -> None:
-        # Render the frozen gameplay frame beneath the overlay.
-        self._previous_state.render(ctx)
+        # Render the frozen gameplay frame beneath the overlay, if we have
+        # a reference to the previous (playing) state.
+        if self._previous_state is not None:
+            self._previous_state.render(ctx)
 
         renderer = ctx.renderer
-        overlay_color = (0.0, 0.0, 0.0, 0.5)
         width, height = ctx.window_size
 
         overlay_tris = [
@@ -61,7 +61,7 @@ class PausedState:
         renderer.draw_claimed_area(overlay_tris)
 
         center = (width / 2.0, height / 2.0)
-        renderer.draw_marker(center, 10.0, (1.0, 1.0, 1.0))
+        renderer.draw_marker(center, 10.0, (1.0, 1.0, 1.0, 1.0))
 
-    def next(self) -> Optional[StateID]:
+    def next(self, ctx: GameContext) -> Optional[StateID]:
         return self._next_id

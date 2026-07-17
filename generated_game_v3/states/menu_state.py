@@ -6,7 +6,7 @@ the PlayingState. Implements the State Protocol from states/base.py.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, List, Any
 
 from states.base import State, StateID
 from core.game_context import GameContext
@@ -21,8 +21,7 @@ class MenuState:
     flag (handled by the state machine / main loop).
     """
 
-    def __init__(self, context: GameContext) -> None:
-        self._context = context
+    def __init__(self, ctx: GameContext) -> None:
         self._next_state: Optional[StateID] = None
         self._title = "QIX CLONE: INK & EXPOSURE"
         self._instructions = [
@@ -34,30 +33,28 @@ class MenuState:
             "Press ENTER to start",
         ]
 
-    def on_enter(self) -> None:
+    def on_enter(self, ctx: GameContext) -> None:
         self._next_state = None
 
-    def on_exit(self) -> None:
+    def on_exit(self, ctx: GameContext) -> None:
         pass
 
-    def handle_events(self, events: list) -> None:
+    def handle_events(self, ctx: GameContext, events: List[Any]) -> None:
         # Events are translated into InputState by core.input.poll and
-        # stored on the context by the state machine / main loop before
-        # calling handle_events; menu only cares about confirm/quit.
+        # stored on the context by main.py before calling handle_events;
+        # menu only cares about confirm (checked in update()).
         pass
 
-    def update(self, dt: float) -> None:
-        input_state: InputState = self._context.input_state
+    def update(self, ctx: GameContext, dt: float) -> None:
+        input_state: InputState = ctx.input_state
         if input_state.confirm:
             self._next_state = StateID.PLAYING
-        elif input_state.quit:
-            self._next_state = StateID.QUIT
 
-    def render(self) -> None:
-        renderer = self._context.renderer
+    def render(self, ctx: GameContext) -> None:
+        renderer = ctx.renderer
         renderer.begin_frame()
 
-        width, height = self._context.window_size
+        width, height = ctx.window_size
         center_x = width / 2.0
         center_y = height / 2.0
 
@@ -72,5 +69,5 @@ class MenuState:
 
         renderer.end_frame()
 
-    def next(self) -> Optional[StateID]:
+    def next(self, ctx: GameContext) -> Optional[StateID]:
         return self._next_state

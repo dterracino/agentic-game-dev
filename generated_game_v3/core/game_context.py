@@ -38,14 +38,17 @@ class GameContext:
     """
 
     renderer: Any = None
+    gl_ctx: Any = None
     input_state: InputState = field(default_factory=InputState)
     score: int = 0
     lives: int = 3
     level: int = 1
     rng_seed: int = 0
+    percent_claimed: float = 0.0
     area_claimed_percent: float = 0.0
     window_size: tuple[int, int] = (0, 0)
     running: bool = True
+    scoreboard: Any = None
     extra: dict = field(default_factory=dict)
 
     def reset_for_new_game(self, rng_seed: Optional[int] = None) -> None:
@@ -54,6 +57,7 @@ class GameContext:
         self.lives = 3
         self.level = 1
         self.area_claimed_percent = 0.0
+        self.percent_claimed = 0.0
         self.extra.clear()
         if rng_seed is not None:
             self.rng_seed = rng_seed

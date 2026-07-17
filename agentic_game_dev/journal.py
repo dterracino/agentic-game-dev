@@ -96,6 +96,12 @@ class RunJournal:
         self.state["stage"] = stage
         self._save()
 
+    def add_repair_attempts(self, count: int) -> None:
+        if count < 0:
+            raise ValueError("Additional repair attempts cannot be negative")
+        self.state["repair_attempts"] = int(self.state["repair_attempts"]) + count
+        self._save()
+
     def start_task(self, name: str) -> None:
         task = self.state.setdefault("tasks", {}).setdefault(name, {})
         task.update({"status": "running", "started_at": _now(), "error": None})

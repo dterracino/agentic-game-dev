@@ -25,6 +25,22 @@ class JournalTests(unittest.TestCase):
 
             self.assertEqual(resumed.state["tasks"]["designer"]["status"], "pending")
 
+    def test_add_repair_attempts_persists_extended_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            journal = RunJournal.create(
+                root,
+                brief="test",
+                model="model",
+                renderer="pygame",
+                repair_attempts=2,
+                smoke_timeout=8,
+            )
+
+            journal.add_repair_attempts(2)
+
+            self.assertEqual(RunJournal.load(root).state["repair_attempts"], 4)
+
     def test_artifacts_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             journal = RunJournal.create(

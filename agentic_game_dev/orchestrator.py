@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -154,16 +155,20 @@ Python 3.11+ using Pygame, with ModernGL only when requested. Enforce separation
 DRY without over-engineering. Define exact cross-file APIs, a main.py main() entry point, delta-time
 movement, explicit game states, and no circular imports. Declare every third-party dependency with
 its PyPI distribution, Python import name, version constraint, and reason. Prefer the standard
-library unless a dependency materially improves the game. Never propose shell commands, network
-access, dynamic code execution, or file access outside the game directory."""
+library unless a dependency materially improves the game. Require main.py to configure standard
+logging to game.log, log uncaught startup/runtime exceptions, and re-raise them. It must never call
+sys.exit() from a finally block or otherwise turn failures into successful exits. Never propose
+shell commands, network access, dynamic code execution, or file access outside the game directory."""
 
 IMPLEMENTER_ROLE = """You are an expert Python game developer. Implement exactly one complete file
 from an agreed plan. Return executable source, not a sketch: no TODOs, ellipses, missing bodies, or
 external assets. Use type hints, separation of concerns, delta time, clamped frame spikes, and
 defensive Pygame initialization. Respect every declared cross-file API. Import third-party packages
 only when they appear in the plan's declared dependency list. Do not use network, subprocess, eval,
-exec, pickle, package installation, or filesystem writes. main.py must expose main() and only run it
-under an __name__ guard."""
+exec, pickle, or package installation. Filesystem writes are limited to explicitly planned local
+persistence and project-local diagnostic logs. main.py must expose main(), configure game.log,
+preserve and log uncaught exceptions, never call sys.exit() from finally, and only run main() under
+an __name__ guard."""
 
 GAMEPLAY_REVIEWER_ROLE = """You are a critical game-design implementation reviewer. Assess the
 complete implemented project against its original brief and final design. Focus on whether the
@@ -185,9 +190,10 @@ third-party import. Never weaken working functionality merely to simplify testin
 REVIEWER_ROLE = """You are a meticulous senior gameplay and Python reviewer. Given the complete
 small project and validation report, return full replacements only for files that need fixes.
 Prioritize crashes, import/API mismatches, unwinnable or unclear play, frame-rate dependence,
-missing state transitions, bad collision logic, and weak feedback. Preserve the architecture and
-declared dependency policy. Never introduce undeclared packages, external assets, network,
-subprocess, eval, exec, pickle, package installation, or filesystem writes."""
+missing state transitions, bad collision logic, weak feedback, immediate clean exits, and exception
+handlers or finally blocks that mask failures. Preserve the architecture and declared dependency
+policy. Never introduce undeclared packages, external assets, network,
+subprocess, eval, exec, pickle, package installation, or filesystem writes beyond planned local persistence and diagnostic logs."""
 
 
 class GameBuilder:
@@ -388,6 +394,7 @@ class GameBuilder:
             f"Original brief:\n{brief}\n\nFinal design/build contract:\n"
             f"{current_plan.as_context()}\n\nLatest validation:\n"
             f"{previous_validation.report}\n\nComplete project:\n{self._project_snapshot()}"
+            f"\n\nDiagnostic log tails:\n{self._diagnostic_logs()}"
         )
         reviews = await asyncio.gather(
             self._text_checkpoint(
@@ -611,6 +618,23 @@ class GameBuilder:
             f"===== {name} =====\n{content}"
             for name, content in self.workspace.read_python_files().items()
         )
+
+    def _diagnostic_logs(self) -> str:
+        sections: list[str] = []
+        for path in (
+            self.workspace.root / "game.log",
+            self.workspace.root / ".agentic" / "runtime.log",
+            self.workspace.root / ".agentic" / "playtest.log",
+        ):
+            if not path.is_file():
+                continue
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                sections.append(f"===== {path.name} =====\nCould not read log: {exc}")
+                continue
+            sections.append(f"===== {path.name} (tail) =====\n{content[-8000:]}")
+        return "\n\n".join(sections) or "(no diagnostic logs yet)"
 
     async def _text_checkpoint(
         self,
@@ -874,15 +898,28 @@ class GameBuilder:
         task_name = self._repair_task_name(checkpoint_prefix, attempt)
         artifact_prefix = checkpoint_prefix.replace(":", "_")
         directory = f"{artifact_prefix}/" if artifact_prefix else ""
+        artifact = journal.task_artifact(task_name)
+        if artifact:
+            self.progress(f"  Reusing checkpoint artifact: {task_name}")
+            raw_patch = dict(journal.read_json_artifact(artifact))
+            try:
+                patch = self._normalize_patch(raw_patch)
+            except BaseException as exc:
+                journal.fail_task(task_name, exc)
+                raise
+            if patch != raw_patch:
+                journal.write_json_artifact(artifact.removeprefix("artifacts/"), patch)
+                self.progress(f"  Normalized checkpoint: {task_name}")
+            if not journal.task_complete(task_name):
+                journal.complete_task(task_name, artifact)
+            return patch
         if journal.task_complete(task_name):
-            artifact = journal.task_artifact(task_name)
-            if not artifact:
-                raise WorkspaceError(f"Repair checkpoint {attempt} has no artifact")
-            self.progress(f"  Reusing checkpoint: {task_name}")
-            return dict(journal.read_json_artifact(artifact))
+            raise WorkspaceError(f"Repair checkpoint {attempt} has no artifact")
         journal.start_task(task_name)
         try:
-            patch = await self._review(context=context, allowed_names=allowed_names)
+            patch = self._normalize_patch(
+                await self._review(context=context, allowed_names=allowed_names)
+            )
             artifact = journal.write_json_artifact(
                 f"{directory}repairs/{attempt}.json", patch
             )
@@ -897,7 +934,8 @@ class GameBuilder:
             role=REVIEWER_ROLE,
             prompt=(
                 f"{context}\n\nAllowed filenames: {sorted(allowed_names)}\n\n"
-                f"Complete project:\n{self._project_snapshot()}"
+                f"Complete project:\n{self._project_snapshot()}\n\n"
+                f"Diagnostic log tails:\n{self._diagnostic_logs()}"
             ),
             tool_name="submit_replacements",
             description="Submit complete replacement files and a concise review summary.",
@@ -905,6 +943,7 @@ class GameBuilder:
         )
 
     def _apply_replacements(self, patch: dict[str, Any], allowed: set[str]) -> None:
+        patch = self._normalize_patch(patch)
         for replacement in patch["files"]:
             filename = str(replacement["filename"])
             if filename not in allowed:
@@ -912,6 +951,147 @@ class GameBuilder:
             self.workspace.write_python(filename, str(replacement["content"]))
         if patch.get("summary"):
             self.progress(f"  Reviewer: {patch['summary']}")
+
+    @staticmethod
+    def _normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
+        raw_files = patch.get("files")
+        if isinstance(raw_files, str):
+            try:
+                raw_files = json.loads(raw_files)
+            except json.JSONDecodeError:
+                try:
+                    raw_files = json.loads(
+                        GameBuilder._escape_json_string_control_characters(raw_files)
+                    )
+                except json.JSONDecodeError:
+                    raw_files = GameBuilder._parse_loose_replacement_list(raw_files)
+        if isinstance(raw_files, dict):
+            if "filename" in raw_files and "content" in raw_files:
+                raw_files = [raw_files]
+            else:
+                raw_files = [
+                    {"filename": filename, "content": content}
+                    for filename, content in raw_files.items()
+                ]
+        if not isinstance(raw_files, list):
+            raise WorkspaceError("Reviewer files must be a list of replacement objects")
+
+        files: list[dict[str, str]] = []
+        for index, replacement in enumerate(raw_files):
+            if not isinstance(replacement, dict):
+                raise WorkspaceError(f"Reviewer replacement {index} must be an object")
+            filename = replacement.get("filename")
+            content = replacement.get("content")
+            if not isinstance(filename, str) or not isinstance(content, str):
+                raise WorkspaceError(
+                    f"Reviewer replacement {index} requires string filename and content"
+                )
+            files.append({"filename": filename, "content": content})
+
+        summary = patch.get("summary", "")
+        if not isinstance(summary, str):
+            raise WorkspaceError("Reviewer summary must be a string")
+        return {"files": files, "summary": summary}
+
+    @staticmethod
+    def _escape_json_string_control_characters(value: str) -> str:
+        output: list[str] = []
+        in_string = False
+        escaped = False
+        for character in value:
+            if not in_string:
+                output.append(character)
+                if character == '"':
+                    in_string = True
+                continue
+            if escaped:
+                output.append(character)
+                escaped = False
+            elif character == "\\":
+                output.append(character)
+                escaped = True
+            elif character == '"':
+                output.append(character)
+                in_string = False
+            elif ord(character) < 32:
+                output.append(json.dumps(character)[1:-1])
+            else:
+                output.append(character)
+        return "".join(output)
+
+    @staticmethod
+    def _parse_loose_replacement_list(value: str) -> list[dict[str, str]]:
+        prefix = '[{"filename": "'
+        separator = '", "content": "'
+        item_separator = '"}, {"filename": "'
+        suffix = '"}]'
+        if not value.startswith(prefix) or not value.endswith(suffix):
+            raise WorkspaceError("Reviewer returned invalid JSON in files")
+
+        body = value[len(prefix) : -len(suffix)]
+        items: list[dict[str, str]] = []
+        while True:
+            boundary = body.find(separator)
+            if boundary < 0:
+                raise WorkspaceError("Reviewer replacement is missing content")
+            filename = body[:boundary]
+            remainder = body[boundary + len(separator) :]
+            next_item = remainder.find(item_separator)
+            if next_item < 0:
+                content = remainder
+                items.append(
+                    {
+                        "filename": filename,
+                        "content": GameBuilder._decode_loose_json_string(content),
+                    }
+                )
+                break
+            content = remainder[:next_item]
+            items.append(
+                {
+                    "filename": filename,
+                    "content": GameBuilder._decode_loose_json_string(content),
+                }
+            )
+            body = remainder[next_item + len(item_separator) :]
+        return items
+
+    @staticmethod
+    def _decode_loose_json_string(value: str) -> str:
+        escapes = {
+            '"': '"',
+            "\\": "\\",
+            "/": "/",
+            "b": "\b",
+            "f": "\f",
+            "n": "\n",
+            "r": "\r",
+            "t": "\t",
+        }
+        output: list[str] = []
+        index = 0
+        while index < len(value):
+            character = value[index]
+            if character != "\\" or index + 1 >= len(value):
+                output.append(character)
+                index += 1
+                continue
+            marker = value[index + 1]
+            if marker == "u" and index + 5 < len(value):
+                digits = value[index + 2 : index + 6]
+                try:
+                    output.append(chr(int(digits, 16)))
+                    index += 6
+                    continue
+                except ValueError:
+                    pass
+            if marker in escapes:
+                output.append(escapes[marker])
+                index += 2
+                continue
+            output.append(character)
+            index += 1
+        return "".join(output)
 
     def _run_validation(self) -> ValidationResult:
         static = validate_project(self.workspace.root)

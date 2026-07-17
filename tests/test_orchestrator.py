@@ -45,9 +45,12 @@ class FakeProvider:
         self.calls: Counter[str] = Counter()
         self.files = {
             "main.py": (
+                "import time\n"
                 "from game import Game\n\n"
                 "def main():\n"
-                "    return Game()\n\n"
+                "    Game()\n"
+                "    while True:\n"
+                "        time.sleep(0.01)\n\n"
                 "if __name__ == '__main__':\n"
                 "    main()\n"
             ),
@@ -139,6 +142,7 @@ def make_builder(
         dependency_approver=lambda _deps, _reason: True,
         progress=messages.append,
         repair_attempts=0,
+        smoke_timeout=0.05,
         **kwargs,
     )
 
@@ -251,6 +255,20 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(second.calls["file:main.py"], 0)
             self.assertEqual(second.calls["file:game.py"], 1)
             self.assertIn("improved = True", (workspace.root / "game.py").read_text())
+
+    def test_normalizes_json_encoded_repair_files(self) -> None:
+        patch = GameBuilder._normalize_patch(
+            {
+                "files": (
+                    '[{"filename": "game.py", "content": '
+                    '"class Game:\n    label = "game"\n"}]'
+                ),
+                "summary": "Fix startup",
+            }
+        )
+
+        self.assertEqual(patch["files"][0]["filename"], "game.py")
+        self.assertEqual(patch["summary"], "Fix startup")
 
     def test_missing_module_can_be_approved_and_added(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

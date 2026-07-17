@@ -15,11 +15,11 @@ The generator supports checkpointed design passes before architecture and checkp
 - Every successful implementation response is written immediately.
 - Plans have no fixed file-count cap; responsibilities determine project structure.
 - Interrupted runs resume only missing or failed work.
-- Validation and gameplay use the generated game's interpreter.
+- Static compilation, timed runtime validation, and gameplay use the generated game's interpreter.
 - Missing imports pause for dependency approval before code is rewritten.
 - Review responses and source replacements are checkpointed.
 - Design and implementation rounds use namespaced artifacts and resume at the unfinished task.
-- Generated code never runs unless --run is explicit.
+- Validation launches main.main() for a bounded smoke interval; full interactive play remains explicit.
 
 Checkpoints live under generated_game/.agentic. The run journal records stages, task status, model, renderer, errors, and artifact locations. It never stores the API key.
 
@@ -88,19 +88,23 @@ Only validated package names and version constraints are accepted. Agents cannot
 agent-game-dev --output generated_game resume
 ~~~
 
-Resume uses the saved model, renderer, repair budget, brief, plan, and completed files. It restores completed files from artifacts and calls agents only for missing or failed tasks.
+Resume uses the saved model, renderer, repair budget, brief, plan, and completed files. It restores completed files from artifacts and calls agents only for missing or failed tasks. If validation uncovers more sequential failures than the saved budget allows, extend it explicitly:
+
+~~~powershell
+agent-game-dev --output generated_game resume --add-repair-attempts 2
+~~~
 
 If a previous project predates run journals, it cannot be resumed; use create --replace to begin a checkpointed run.
 
 ## Run and refine
 
-A completed game can be launched explicitly:
+A completed game can be launched explicitly while teeing stdout and errors to .agentic/playtest.log:
 
 ~~~powershell
-generated_game\.venv\Scripts\python.exe generated_game\main.py
+agent-game-dev --output generated_game run
 ~~~
 
-Or add --run to create or resume.
+You can also add --run to create or resume. The bounded validator may briefly open a game window. Every automated launch appends its status and captured output to .agentic/runtime.log. Runtime and playtest log tails are supplied to repair and implementation-review agents. Generated entry points are required to log uncaught failures to game.log without converting exceptions into successful exits.
 
 Apply playtest feedback with:
 
@@ -115,11 +119,11 @@ agent-game-dev --output generated_game refine "Hits need stronger feedback"
 --output DIRECTORY
 --renderer pygame|moderngl
 --repair-attempts N
---smoke-timeout SECONDS
+--smoke-timeout SECONDS  (game must remain active for this launch interval)
 --dependency-policy ask|allow|never
 ~~~
 
-The CLI prints the effective model, output, renderer, repair budget, and game interpreter before work begins.
+The CLI prints the effective model, output, renderer, iteration counts, repair budget, and game interpreter before work begins.
 
 ## Safety
 

@@ -24,12 +24,20 @@ class PolygonMesh:
         self._vbo: moderngl.Buffer | None = None
         self._vao: moderngl.VertexArray | None = None
         self._vertex_count: int = 0
+
+        # Attribute name expected in the vertex shader. This must match the
+        # `in_position` attribute declared in render/shaders.py's fallback
+        # vertex shader (and any custom shaders_src/*.vert files), which is
+        # also used by LineBatch so the same fallback vertex shader can be
+        # shared across primitives.
+        self._pos_attr = "in_position"
+
         # Pre-allocate a small buffer to avoid None checks before first upload.
         initial = np.zeros(6, dtype="f4")
         self._vbo = ctx.buffer(initial.tobytes(), dynamic=True)
         self._vao = ctx.vertex_array(
             self._program,
-            [(self._vbo, "2f", "in_vert")],
+            [(self._vbo, "2f", self._pos_attr)],
         )
 
     def upload_triangles(self, flat_tris: Sequence[float]) -> None:
@@ -55,7 +63,7 @@ class PolygonMesh:
             self._vbo = self._ctx.buffer(data.tobytes(), dynamic=True)
             self._vao = self._ctx.vertex_array(
                 self._program,
-                [(self._vbo, "2f", "in_vert")],
+                [(self._vbo, "2f", self._pos_attr)],
             )
         else:
             self._vbo.write(data.tobytes())

@@ -3,11 +3,11 @@
   "status": "complete",
   "stage": "complete",
   "created_at": "2026-07-17T03:53:48.884417+00:00",
-  "updated_at": "2026-07-17T05:17:13.146873+00:00",
+  "updated_at": "2026-07-17T07:01:34.347718+00:00",
   "brief": "A Qix clone",
   "model": "claude-sonnet-5",
   "renderer": "moderngl",
-  "repair_attempts": 2,
+  "repair_attempts": 4,
   "smoke_timeout": 8.0,
   "tasks": {
     "designer": {
@@ -27,8 +27,8 @@
     },
     "run": {
       "status": "failed",
-      "failed_at": "2026-07-17T05:05:54.649705+00:00",
-      "error": "Streaming is required for operations that may take longer than 10 minutes. See https://github.com/anthropics/anthropic-sdk-python#long-requests for more details"
+      "failed_at": "2026-07-17T06:54:43.547566+00:00",
+      "error": "Reviewer returned invalid JSON in files"
     },
     "plan": {
       "status": "complete",
@@ -213,8 +213,31 @@
     },
     "validation": {
       "status": "complete",
-      "completed_at": "2026-07-17T05:17:13.145872+00:00",
-      "error": null
+      "completed_at": "2026-07-17T07:01:34.344050+00:00",
+      "error": null,
+      "failed_at": "2026-07-17T06:57:35.050914+00:00"
+    },
+    "repair:1": {
+      "status": "complete",
+      "started_at": "2026-07-17T06:49:45.176117+00:00",
+      "error": null,
+      "completed_at": "2026-07-17T06:51:02.739739+00:00",
+      "artifact": "artifacts/repairs/1.json"
+    },
+    "repair:2": {
+      "status": "complete",
+      "started_at": "2026-07-17T06:51:03.528814+00:00",
+      "error": null,
+      "completed_at": "2026-07-17T06:57:34.020782+00:00",
+      "artifact": "artifacts/repairs/2.json",
+      "failed_at": "2026-07-17T06:54:43.546625+00:00"
+    },
+    "repair:3": {
+      "status": "complete",
+      "started_at": "2026-07-17T07:00:52.742649+00:00",
+      "error": null,
+      "completed_at": "2026-07-17T07:01:26.196270+00:00",
+      "artifact": "artifacts/repairs/3.json"
     }
   },
   "last_error": null
