@@ -1,0 +1,175 @@
+{
+  "title": "Qix Clone (pygame renderer)",
+  "pitch": "A single-arena Qix clone where the real design fix is a Pressure Meter that punishes border-turtling: read the board, commit to a cut into open space, race to close it before the Qix or a spawned Sparx catches you, bank the claimed area, and repeat until 75% of the board is yours.",
+  "core_loop": [
+    "Read the board: observe Qix position/trajectory, current claimed %, and Pressure Meter fill while standing on the border",
+    "Commit: press a direction off the border into open space, entering the vulnerable 'drawing' state (no idle-while-drawing allowed)",
+    "Execute: reach another claimed/border edge to close the shape; holding Shift draws slower for a higher score multiplier but extends exposure time",
+    "Resolve: flood fill splits the enclosed region, the side without the Qix is claimed, score/combo updates, Qix speed escalates with claimed %, Pressure Meter drains",
+    "Repeat commit-execute-resolve until claimed area reaches 75% (victory) or lives reach 0 (game over)"
+  ],
+  "controls": [
+    "Arrow keys / WASD: 4-directional movement, snapped to grid axes (no diagonals)",
+    "Hold Shift while moving: slow draw (2x point multiplier, half draw speed); release for fast draw (1x multiplier, full speed)",
+    "P or Escape: pause / unpause",
+    "Enter / Space: confirm on menu, game-over, and victory screens",
+    "Window close button: quit"
+  ],
+  "quality_bar": [
+    "Movement and all entity motion use delta-time (position += direction * speed * dt) so behavior is identical at 30fps and 240fps",
+    "Flood fill correctly splits enclosed regions and claims only the side not containing the Qix, verified by a standalone prototype/test before UI polish",
+    "Zero circular imports: dependency direction strictly core -> utils -> entities -> world -> engine -> states -> main, enforced by never importing states/entities/world from engine",
+    "Pressure Meter measurably prevents indefinite border-turtling: sustained idling on the border provably increases Sparx count or Qix speed within a bounded time window",
+    "All state transitions (MENU/PLAYING/PAUSED/GAME_OVER/VICTORY) are explicit via StateManager.switch_to, with no state mutating another state's internals directly",
+    "Game runs at a stable frame rate with no unhandled exceptions across a full menu -> play -> victory/game-over -> menu cycle"
+  ],
+  "files": [
+    {
+      "name": "main.py",
+      "purpose": "Single entry point: initializes pygame, builds screen/clock/AssetManager/Renderer/InputHandler, constructs GameContext, registers all States with StateManager, and runs App.run(). Contains def main() -> None guarded by if __name__ == '__main__'.",
+      "public_api": [
+        "def main() -> None"
+      ]
+    },
+    {
+      "name": "game/core/constants.py",
+      "purpose": "All tunable numeric constants (screen size, grid cell size, speeds, claim target, starting lives, Pressure Meter fill/drain rates, escalation thresholds). No logic, no imports from elsewhere in game/.",
+      "public_api": [
+        "SCREEN_W",
+        "SCREEN_H",
+        "FPS_CAP",
+        "CELL_SIZE",
+        "GRID_W",
+        "GRID_H",
+        "PLAYER_SPEED",
+        "PLAYER_DRAW_SPEED_SLOW",
+        "PLAYER_DRAW_SPEED_FAST",
+        "QIX_BASE_SPEED",
+        "SPARX_BASE_SPEED",
+        "CLAIM_TARGET_PCT",
+        "STARTING_LIVES",
+        "PRESSURE_FILL_RATE",
+        "PRESSURE_DRAIN_ON_CLAIM",
+        "PRESSURE_MAX"
+      ]
+    },
+    {
+      "name": "game/core/types.py",
+      "purpose": "Shared value types and enums used across every layer: Vec2 math, CellState, GameState, InputIntent. Zero dependencies on other game/ packages.",
+      "public_api": [
+        "class Vec2",
+        "class CellState(Enum)",
+        "class GameState(Enum)",
+        "class InputIntent"
+      ]
+    },
+    {
+      "name": "game/core/context.py",
+      "purpose": "GameContext dataclass threading engine services (screen, renderer, assets) and mutable run state (dt, score, lives, level, pressure) through every state/entity update call each frame.",
+      "public_api": [
+        "class GameContext"
+      ]
+    },
+    {
+      "name": "game/utils/geometry.py",
+      "purpose": "Pure geometry helpers: segment intersection tests, point-in-cell, grid/pixel conversions used by Trail self-intersection checks and collision tests.",
+      "public_api": [
+        "def segments_intersect(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> bool",
+        "def point_to_cell(p: Vec2, cell_size: int) -> tuple[int, int]",
+        "def cell_to_point(cx: int, cy: int, cell_size: int) -> Vec2"
+      ]
+    },
+    {
+      "name": "game/engine/input.py",
+      "purpose": "Translates raw pygame events and key state into a single frame's InputIntent. No knowledge of states or entities.",
+      "public_api": [
+        "class InputHandler",
+        "InputHandler.poll(events: list) -> InputIntent"
+      ]
+    },
+    {
+      "name": "game/engine/renderer.py",
+      "purpose": "Thin wrapper over pygame.draw and surface blits; the only module that issues raw pygame drawing calls, keeping draw calls out of entity/state logic bodies.",
+      "public_api": [
+        "class Renderer",
+        "Renderer.clear(color) -> None",
+        "Renderer.line(p1: Vec2, p2: Vec2, color, width: int) -> None",
+        "Renderer.polyline(points: list[Vec2], color, width: int) -> None",
+        "Renderer.rect(rect, color, width: int) -> None",
+        "Renderer.circle(center: Vec2, radius: float, color, width: int) -> None",
+        "Renderer.text(text: str, pos: Vec2, font, color) -> None",
+        "Renderer.present() -> None"
+      ]
+    },
+    {
+      "name": "game/engine/app.py",
+      "purpose": "Owns the fixed top-level loop: tick clock for dt, poll input, delegate to StateManager for input/update/draw, flip display, quit cleanly. Never imports states/entities/world.",
+      "public_api": [
+        "class App",
+        "App.run() -> None"
+      ]
+    },
+    {
+      "name": "game/states/state_manager.py",
+      "purpose": "Registers concrete State instances per GameState id and dispatches handle_input/update/draw to whichever is current; owns explicit transition table logic via switch_to.",
+      "public_api": [
+        "class State(ABC)",
+        "class StateManager",
+        "StateManager.register(state_id: GameState, state: State) -> None",
+        "StateManager.switch_to(state_id: GameState) -> None",
+        "StateManager.handle_input(intent: InputIntent) -> None",
+        "StateManager.update(dt: float) -> None",
+        "StateManager.draw() -> None"
+      ]
+    },
+    {
+      "name": "game/world/board.py",
+      "purpose": "Combines Grid, Trail, and flood-fill area resolution into the single board API states/entities use: border/claim queries, cut lifecycle, percent claimed, border polyline for Sparx patrol and rendering.",
+      "public_api": [
+        "class Grid",
+        "class Trail",
+        "class Board",
+        "Board.is_on_border_or_claimed(cx: int, cy: int) -> bool",
+        "Board.begin_cut(start_cell: tuple[int, int]) -> None",
+        "Board.finish_cut(end_cell: tuple[int, int], qix_cell: tuple[int, int]) -> int",
+        "Board.percent_claimed() -> float",
+        "Board.border_polyline() -> list[Vec2]",
+        "def flood_fill_region(grid: Grid, seed: tuple[int, int], blocked: frozenset) -> set",
+        "def resolve_cut(grid: Grid, cut_cells: list, qix_cell: tuple[int, int]) -> int"
+      ]
+    },
+    {
+      "name": "game/entities/entities.py",
+      "purpose": "Player, Qix, and Sparx entity classes sharing the Entity ABC; all movement is delta-time based (position += direction * speed * dt). Depends on core/utils/world types only, never on states.",
+      "public_api": [
+        "class Entity(ABC)",
+        "class Player(Entity)",
+        "class Qix(Entity)",
+        "class Sparx(Entity)",
+        "Player.apply_intent(intent: InputIntent, board) -> None",
+        "Player.is_drawing() -> bool",
+        "Qix.collides_with_point(p: Vec2, radius: float) -> bool",
+        "Sparx.collides_with_point(p: Vec2, radius: float) -> bool"
+      ]
+    },
+    {
+      "name": "game/states/game_states.py",
+      "purpose": "Concrete State implementations: MenuState, PlayingState, PausedState, GameOverState, VictoryState. PlayingState wires Board + Player + Qix + Sparx + Pressure Meter and drives collisions/escalation/win-loss checks, requesting transitions only via self.manager.switch_to.",
+      "public_api": [
+        "class MenuState(State)",
+        "class PlayingState(State)",
+        "class PausedState(State)",
+        "class GameOverState(State)",
+        "class VictoryState(State)"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "distribution": "pygame-ce",
+      "import_name": "pygame",
+      "version": ">=2.5,<3",
+      "reason": "Required Pygame runtime"
+    }
+  ]
+}

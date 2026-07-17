@@ -1,0 +1,8 @@
+{
+  "python": "E:\\agentic-game-dev\\generated_game_v2\\.venv\\Scripts\\python.exe",
+  "base_python": "C:\\Program Files\\Python312\\python.exe",
+  "requirements_hash": "fc5a4a8ce42f8e7f0450bd46431ac4e9c1d825005ef3bc7313f4609e6cd91139",
+  "requirements": [
+    "pygame-ce>=2.5,<3"
+  ]
+}

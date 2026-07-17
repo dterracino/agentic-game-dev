@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+
+MISSING_MODULE_PATTERN = re.compile(r"No module named ['\"]([^'\"]+)['\"]")
 
 
 @dataclass(frozen=True)
 class ValidationResult:
     ok: bool
     report: str
+
+    @property
+    def missing_module(self) -> str | None:
+        match = MISSING_MODULE_PATTERN.search(self.report)
+        return match.group(1).split(".", 1)[0] if match else None
 
 
 def validate_project(root: Path) -> ValidationResult:
@@ -31,14 +39,16 @@ def validate_project(root: Path) -> ValidationResult:
     return ValidationResult(True, f"Static validation passed for {len(files)} Python files")
 
 
-def smoke_test(root: Path, timeout: float) -> ValidationResult:
-    """Import main under SDL dummy drivers; never calls the interactive game loop."""
+def smoke_test(root: Path, python: Path, timeout: float) -> ValidationResult:
+    """Import main with the game environment and SDL dummy drivers."""
+    if not python.is_file():
+        return ValidationResult(False, f"Game interpreter is missing: {python}")
     env = os.environ.copy()
     env.setdefault("SDL_VIDEODRIVER", "dummy")
     env.setdefault("SDL_AUDIODRIVER", "dummy")
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", "import main; assert callable(main.main)"],
+            [str(python), "-c", "import main; assert callable(main.main)"],
             cwd=root,
             env=env,
             capture_output=True,
@@ -54,5 +64,7 @@ def smoke_test(root: Path, timeout: float) -> ValidationResult:
     return ValidationResult(True, output or "Import smoke test passed")
 
 
-def run_game(root: Path) -> int:
-    return subprocess.call([sys.executable, "main.py"], cwd=root)
+def run_game(root: Path, python: Path) -> int:
+    if not python.is_file():
+        raise RuntimeError(f"Game interpreter is missing: {python}")
+    return subprocess.call([str(python), "main.py"], cwd=root)

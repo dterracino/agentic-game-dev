@@ -1,0 +1,75 @@
+# Qix Clone — Design Critique & Proposal
+
+## Critique: "A Qix clone" is not a design, it's a genre tag
+
+Before touching ModernGL, we need to answer three things the pitch doesn't:
+
+1. **What's the actual tension?** Original Qix's core tension — draw slow for bonus points vs. draw fast for safety — is good, but the game has a well-known flaw: cautious players can stall indefinitely, turtling along the border. That kills the 30-second loop you want. We need a mechanic that *forces* commitment.
+2. **Which enemies are we actually building?** Arcade Qix has the Qix itself, Sparx (border crawlers), and Fuse (kills you if you idle). Cloning all three plus multi-level bonus stages is not a one-developer scope. Pick the minimum set that produces the core tension, cut the rest.
+3. **What does "30-second loop" mean here?** A full level (claim 75%) can run 60–90s. The loop must be the **sub-decision**: pick a target, commit, draw, survive, bank. That decision needs to resolve in ~10-20s, repeatable 3-4x per level.
+
+Below is a scoped answer to all three.
+
+---
+
+## Core Loop (target: 15–25s per repetition)
+
+1. **Read the board** — Qix position/trajectory, current claimed %, timer state. (2-3s)
+2. **Commit to a line** — move off the border into open space. Once moving, you're "drawing" (vulnerable).
+3. **Execute** — reach another claimed edge to close the shape. Longer/slower path = more area claimed = more points, but more exposure time.
+4. **Resolve** — shape fills, score pops, Qix reacts (gets faster/angrier), timer partially resets.
+5. **Repeat** until board hits 75% claimed.
+
+**Fix for turtling:** add a **Pressure Meter** — a bar that fills while you sit on the border. At full, it spawns a Sparx or speeds the Qix by a fixed increment. Committing to a draw and successfully closing a shape drains it. This makes stalling a resource-negative choice instead of a safe default, which is the actual design gap in the original.
+
+---
+
+## Controls (must be readable at a glance, no ambiguity)
+
+- **4-directional movement only**, snapped to a fixed grid (e.g., 40px cells on a 800x600 arena → 20x15 grid). No analog/free-draw — it's unreadable at speed and hard to render cleanly.
+- **Hold to draw slow** (2x points, half speed) / **release for fast draw** (1x points, full speed). One button (or just "hold direction key longer" via a modifier key) — don't add a third input.
+- Player is **always moving** once a direction is pressed — no idle-while-drawing state. Removes a whole class of "wait it out" exploits.
+
+---
+
+## Enemies — minimal viable set
+
+- **Qix**: single bouncing line-segment entity confined to unclaimed area, semi-random reflection off walls/claimed edges with a *slight* homing bias toward the player's current draw path (telegraphed by changing its color/glow 0.5s before it turns). Predictability + a tell = fairness.
+- **Sparx**: 1-2 dots that patrol the *claimed border only*. They're the punishment for the Pressure Meter maxing out, not a permanent fixture. This is your only second enemy type — do not add Fuse, do not add multiple Qix. Cut.
+
+---
+
+## Escalation (must be curved, not a difficulty cliff)
+
+| Claimed % | Qix speed | Sparx count | Pressure fill rate |
+|---|---|---|---|
+| 0-25% | base | 0 | slow |
+| 25-50% | +15% | 1 | medium |
+| 50-75% | +30% | 2 | fast |
+
+Cap total speed increase at +30% base — beyond that the grid-snapped movement becomes unreadable. Escalation is **within a single level**, not across a meta-progression — keep the whole game one arena, one difficulty ramp, replayed for high score. That's your scope boundary.
+
+---
+
+## Feedback (all synthesized, no imported assets)
+
+- **Fill**: shape fills via triangle-fan from centroid, animated 150ms scale-in + color flash (white → territory color), done as a vertex color lerp in a ModernGL shader — no textures needed.
+- **Line drawing**: draw the "wet" line as a thick instanced quad strip; pulse alpha at 8Hz while wet to read danger state at a glance.
+- **Near-miss**: brief chromatic-aberration-style shader pulse (offset RGB channels 2px) when Qix passes within 1 grid cell — free tension signal, cheap to implement as a single shader uniform.
+- **Audio**: procedural only — generate square/triangle waves in code (numpy → raw buffer → OpenAL/pyaudio). Draw = rising pitch tied to line length. Fill = 3-note arpeggio, pitch scales with claimed %. Death = descending noise burst. No files, no DAW.
+
+---
+
+## Scope Cut List (say no to these explicitly)
+
+- Multiple Qix, Fuse enemy, power-ups, bonus stages, multiple arenas/levels, free-form vector drawing, gamepad analog support.
+- One arena. One enemy pair (Qix + Sparx). One win condition (75%). One loss condition (touched while wet). Score = area × speed multiplier × combo of consecutive fast fills.
+
+---
+
+## Open Questions to Resolve Before Coding
+
+- Flood-fill algorithm for determining "smaller enclosed region" when a shape closes — this is the one genuinely hard technical piece. Recommend: maintain grid as a 2D boolean array, use scanline flood fill from a border sample point to determine which side is smaller/claimable. Solve this in a prototype **before** any rendering work — it's the actual risk in this project, not the visuals.
+- Does holding-to-slow-draw feel good with keyboard, or does it need a distinct modifier key? Prototype both in first week.
+
+This scope is buildable solo in a few weeks: grid logic + flood fill (hardest part, isolate early), simple shader-based rendering, procedural audio. Everything else is polish on a loop that's already proven to work for 40 years — the only real design addition here is the Pressure Meter fixing the turtling problem.

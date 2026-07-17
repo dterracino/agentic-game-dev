@@ -1,12 +1,10 @@
 Metadata-Version: 2.4
 Name: agentic-game-dev
-Version: 2.0.0
-Summary: A safe, coordinated agent team for generating polished Pygame games
+Version: 2.1.0
+Summary: A resumable agent team for generating isolated Pygame games
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: anthropic<1,>=0.40
-Requires-Dist: pygame-ce<3,>=2.5
-Requires-Dist: moderngl<6,>=5.12
 Requires-Dist: python-dotenv<2,>=1.0
 Provides-Extra: dev
 Requires-Dist: ruff>=0.11; extra == "dev"
@@ -14,22 +12,25 @@ Requires-Dist: mypy>=1.15; extra == "dev"
 
 # Agentic Game Dev
 
-Agentic Game Dev coordinates a small team of AI agents to design, implement, review, and refine a complete Pygame game. Version 2 replaces the original 2024 single-script prototype with a package that is safer to run, easier to test, and much better at keeping multiple generated files coherent.
+Agentic Game Dev coordinates designer, architect, implementation, and review agents to build a complete Pygame game. Runs are checkpointed, resumable, dependency-aware, and isolated from the coordinator's Python environment.
 
-## What changed
+The current release intentionally uses one planning round while the new recovery lifecycle is proven. Multi-round design iteration is the next layer, not part of this release.
 
-- Designer and architect agents explore the brief in parallel.
-- A lead architect produces a schema-validated build contract with exact file APIs.
-- One implementation agent owns each file.
-- An integration reviewer repairs syntax, imports, gameplay logic, and polish issues.
-- Generated filenames are allow-listed and cannot escape the output directory.
-- Existing output is preserved unless --replace is explicit; repositories and the current directory are never replacement targets.
-- Generated code is not executed unless --run is explicit.
-- Every build gets static parsing and a headless import smoke test.
-- The model, renderer, output path, timeouts, and repair budget are visible CLI options.
-- The old destructive import-time behavior and fragile XML/regex parsing are gone.
+## Core behavior
 
-The generated game uses procedural Pygame visuals and audio, so it remains self-contained. Choose --renderer moderngl when the brief genuinely benefits from shaders.
+- Designer and architect proposals are checkpointed independently.
+- The final plan declares exact file APIs and every third-party dependency.
+- A requirements.txt file is written before dependency approval.
+- Each game receives its own .venv.
+- The coordinator asks before installing structured dependencies by default.
+- Every successful implementation response is written immediately.
+- Interrupted runs resume only missing or failed work.
+- Validation and gameplay use the generated game's interpreter.
+- Missing imports pause for dependency approval before code is rewritten.
+- Review responses and source replacements are checkpointed.
+- Generated code never runs unless --run is explicit.
+
+Checkpoints live under generated_game/.agentic. The run journal records stages, task status, model, renderer, errors, and artifact locations. It never stores the API key.
 
 ## Setup
 
@@ -42,34 +43,73 @@ python -m pip install -e .
 Copy-Item .env.example .env
 ~~~
 
-Open .env and replace the placeholder API key:
+Set the key in .env:
 
 ~~~dotenv
 ANTHROPIC_API_KEY=your-anthropic-api-key
 ANTHROPIC_MODEL=claude-sonnet-5
 ~~~
 
-The .env file is ignored by Git. Do not commit real API keys. The model entry is optional; omit it to use the built-in default.
+The .env file is ignored by Git. Model precedence is an explicit --model option, then .env, then the process environment, then the built-in default.
 
 ## Create a game
 
-~~~powershell
-agent-game-dev create "A neon arena game where movement paints temporary walls"
-~~~
-
-The default output is generated_game. Review it first, then run it:
+Global options go before the command:
 
 ~~~powershell
-python generated_game\main.py
+agent-game-dev --output generated_game create "A neon arena game where movement paints temporary walls"
 ~~~
 
-To replace a previous generated game and launch it after validation:
+Before packages are installed, the CLI shows each requirement and asks for approval. The resulting layout includes:
+
+~~~text
+generated_game/
+  .agentic/
+    run.json
+    artifacts/
+  .venv/
+  .gitignore
+  requirements.txt
+  game_plan.json
+  main.py
+  ...
+~~~
+
+Use --dependency-policy allow for an unattended trusted run, or never to prohibit package installation:
 
 ~~~powershell
-agent-game-dev --output generated_game create --replace --run "Your game brief"
+agent-game-dev --dependency-policy allow create "Your game brief"
 ~~~
 
-Global options go before create or refine:
+Only validated package names and version constraints are accepted. Agents cannot supply shell commands, package URLs, Git repositories, or alternate indexes.
+
+## Resume an interrupted run
+
+~~~powershell
+agent-game-dev --output generated_game resume
+~~~
+
+Resume uses the saved model, renderer, repair budget, brief, plan, and completed files. It restores completed files from artifacts and calls agents only for missing or failed tasks.
+
+If a previous project predates run journals, it cannot be resumed; use create --replace to begin a checkpointed run.
+
+## Run and refine
+
+A completed game can be launched explicitly:
+
+~~~powershell
+generated_game\.venv\Scripts\python.exe generated_game\main.py
+~~~
+
+Or add --run to create or resume.
+
+Apply playtest feedback with:
+
+~~~powershell
+agent-game-dev --output generated_game refine "Hits need stronger feedback"
+~~~
+
+## Options
 
 ~~~text
 --model MODEL
@@ -77,21 +117,16 @@ Global options go before create or refine:
 --renderer pygame|moderngl
 --repair-attempts N
 --smoke-timeout SECONDS
+--dependency-policy ask|allow|never
 ~~~
 
-The CLI prints the effective settings before making API calls, so cost and behavior are not hidden.
-
-## Refine after playtesting
-
-~~~powershell
-agent-game-dev --output generated_game refine "The first minute is too easy and hits need stronger feedback"
-~~~
-
-Refinement can only replace Python files already in that generated project. It cannot invent paths or write elsewhere.
+The CLI prints the effective model, output, renderer, repair budget, and game interpreter before work begins.
 
 ## Safety
 
-This program writes model-generated source code. It constrains where agents can write, scans syntax, imports the project with dummy SDL drivers, and requires --run before launching it. Those controls reduce risk; they do not prove arbitrary generated code is safe. Read generated files before running games made from untrusted prompts, and use an isolated environment for serious experimentation.
+Package installation is performed by the trusted coordinator only after a structured plan and, by default, explicit approval. Generated code is restricted to planned Python filenames and cannot write outside the game directory through the generation protocol.
+
+These controls reduce risk but cannot prove arbitrary generated code is safe. Review generated files before running games made from untrusted prompts.
 
 ## Development
 
@@ -99,5 +134,3 @@ This program writes model-generated source code. It constrains where agents can 
 python -m unittest discover -s tests -v
 python -m compileall -q agentic_game_dev tests agent_game_maker.py
 ~~~
-
-The provider adapter, orchestration, workspace policy, and validation are separate modules so they can be tested or replaced independently.
