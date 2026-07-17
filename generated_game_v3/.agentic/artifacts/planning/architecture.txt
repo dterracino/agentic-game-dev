@@ -1,0 +1,317 @@
+# Qix Clone — Architecture Plan (Python 3.11+, Pygame + ModernGL)
+
+## 1. Dependencies
+
+| PyPI distribution | Import name | Version constraint | Reason |
+|---|---|---|---|
+| pygame-ce | `pygame` | `>=2.5,<3.0` | Window/context creation, input handling, event loop, timing (`Clock`). Using `pygame-ce` (community edition) for active maintenance; API-compatible with `pygame`. |
+| moderngl | `moderngl` | `>=5.10,<6.0` | Requested renderer — programmable GL pipeline for drawing the claimed-area polygon, grid, player, and Qix enemy with GPU-accelerated fills instead of slow per-pixel CPU rasterization. |
+| moderngl-window | *(not used)* | — | Deliberately excluded — we drive the GL context via `pygame` (`pygame.display.set_mode` with `OPENGL | DOUBLEBUF`) to keep one windowing/input system and avoid conflicting event loops. |
+| numpy | `numpy` | `>=1.26,<2.0` | Efficient vertex buffer construction/updates for the fill polygon (triangulated each time area is claimed) and batched line drawing. Standard-lib arrays are impractical for per-frame VBO uploads. |
+
+No other third-party dependencies. Standard library covers: `dataclasses`, `enum`, `math`, `array`, `time`, `pathlib`, `json` (for high-score persistence, local file only).
+
+---
+
+## 2. Directory Layout
+
+```
+qix_clone/
+├── main.py
+├── settings.py
+├── states/
+│   ├── __init__.py
+│   ├── base.py
+│   ├── menu_state.py
+│   ├── playing_state.py
+│   ├── paused_state.py
+│   └── game_over_state.py
+├── core/
+│   ├── __init__.py
+│   ├── state_machine.py
+│   ├── game_context.py
+│   ├── input.py
+│   └── clock.py
+├── gamelib/
+│   ├── __init__.py
+│   ├── board.py
+│   ├── grid_geometry.py
+│   ├── polygon_fill.py
+│   ├── player.py
+│   ├── enemies.py
+│   ├── sparx.py
+│   └── scoring.py
+├── render/
+│   ├── __init__.py
+│   ├── gl_context.py
+│   ├── shaders.py
+│   ├── renderer.py
+│   ├── line_batch.py
+│   ├── polygon_mesh.py
+│   └── shaders_src/
+│       ├── line.vert
+│       ├── line.frag
+│       ├── fill.vert
+│       └── fill.frag
+└── persistence/
+    ├── __init__.py
+    └── highscores.py
+```
+
+**Dependency direction (no cycles):**
+`main.py` → `core` → `states` → `gamelib` + `render`
+`render` never imports from `gamelib` or `states` (only primitive data: points, colors, floats).
+`gamelib` never imports from `render` or `pygame`/`moderngl` (pure logic, testable headless).
+`states` is the only layer that wires `gamelib` output into `render` input.
+
+---
+
+## 3. Core Contracts (exact cross-file APIs)
+
+### `core/game_context.py`
+```python
+@dataclass
+class GameContext:
+    window_size: tuple[int, int]
+    gl_ctx: moderngl.Context
+    renderer: "render.renderer.Renderer"
+    input_state: "core.input.InputState"
+    score: "gamelib.scoring.ScoreBoard"
+    rng_seed: int | None = None
+```
+Passed by reference into every `State`. Single mutable "world handle" — avoids global state and circular imports.
+
+### `core/state_machine.py`
+```python
+class StateMachine:
+    def __init__(self, ctx: GameContext, initial: "states.base.State"): ...
+    def change(self, new_state: "states.base.State") -> None: ...
+    def handle_events(self, events: list[pygame.event.Event]) -> None: ...
+    def update(self, dt: float) -> None: ...
+    def render(self) -> None: ...
+```
+
+### `states/base.py`
+```python
+class State(Protocol):
+    def on_enter(self, ctx: GameContext) -> None: ...
+    def on_exit(self, ctx: GameContext) -> None: ...
+    def handle_events(self, ctx: GameContext, events: list[pygame.event.Event]) -> None: ...
+    def update(self, ctx: GameContext, dt: float) -> None: ...
+    def render(self, ctx: GameContext) -> None: ...
+```
+
+Explicit game states (enum-referenced by factory, not required at runtime since each state is an object):
+```python
+class StateID(Enum):
+    MENU = auto()
+    PLAYING = auto()
+    PAUSED = auto()
+    GAME_OVER = auto()
+```
+Transitions requested via a small callback in `GameContext` or return value:
+```python
+# states/base.py
+class State(Protocol):
+    def next(self) -> "State | None": ...  # None = no transition this frame
+```
+`StateMachine.update()` checks `current.next()` after update and swaps if non-None, calling `on_exit`/`on_enter`.
+
+### `core/input.py`
+```python
+@dataclass
+class InputState:
+    move_dir: tuple[int, int]      # (-1,0,1)^2 normalized intent
+    draw_held: bool                # "fast/dangerous draw" button
+    pause_pressed: bool
+    confirm_pressed: bool
+
+def poll(events: list[pygame.event.Event]) -> InputState: ...
+```
+Pure function — testable, decouples pygame event objects from game logic beyond this single translation point.
+
+---
+
+## 4. Game Logic Layer (`gamelib/`) — pure Python, no rendering imports
+
+### `gamelib/grid_geometry.py`
+```python
+Point = tuple[float, float]
+
+def point_in_polygon(p: Point, poly: list[Point]) -> bool: ...
+def segment_intersects(a1: Point, a2: Point, b1: Point, b2: Point) -> Point | None: ...
+def polygon_area(poly: list[Point]) -> float: ...
+```
+
+### `gamelib/board.py`
+Owns the claimed-territory polygon(s), the border, and the "trail" line being drawn.
+```python
+class Board:
+    def __init__(self, width: float, height: float): ...
+    @property
+    def claimed_polygons(self) -> list[list[Point]]: ...
+    @property
+    def border(self) -> list[Point]: ...
+    @property
+    def active_trail(self) -> list[Point]: ...
+    def start_trail(self, origin: Point) -> None: ...
+    def extend_trail(self, point: Point) -> None: ...
+    def commit_trail(self, exit_point: Point, side_hint: Point) -> float:
+        """Closes the trail against the border, splits area, keeps the
+        smaller/larger side per rules, returns % area claimed this call."""
+    def cancel_trail(self) -> None: ...
+    def percent_claimed(self) -> float: ...
+```
+Uses `polygon_fill.py` internally for area splitting (Sutherland–Hodgman-style clip against border + trail).
+
+### `gamelib/polygon_fill.py`
+```python
+def split_polygon_by_path(border: list[Point], path: list[Point]) -> tuple[list[Point], list[Point]]: ...
+def triangulate(poly: list[Point]) -> list[Point]:
+    """Ear-clipping fan; returns flat triangle list for GPU upload."""
+```
+
+### `gamelib/player.py`
+```python
+@dataclass
+class Player:
+    pos: Point
+    speed_units_per_sec: float
+    drawing: bool
+
+    def update(self, dt: float, input_state: InputState, board: Board) -> None:
+        """Delta-time movement, constrained to border while idle,
+        constrained to grid axis while drawing, per Qix rules."""
+```
+
+### `gamelib/enemies.py` / `gamelib/sparx.py`
+```python
+class QixEnemy:
+    def update(self, dt: float, board: Board) -> None: ...  # erratic bounce movement, dt-scaled
+
+class Sparx:
+    def update(self, dt: float, board: Board) -> None: ...  # travels border at fixed speed
+```
+
+### `gamelib/scoring.py`
+```python
+@dataclass
+class ScoreBoard:
+    score: int = 0
+    lives: int = 3
+    def add_area(self, percent: float, fast_draw: bool) -> None: ...
+```
+
+All `update(dt: float, ...)` signatures use **seconds as float**, computed once in `main.py` via `pygame.time.Clock().tick(FPS) / 1000.0` and passed down — no entity reads wall-clock itself.
+
+---
+
+## 5. Render Layer (`render/`) — moderngl only, no gamelib imports
+
+Renderer consumes **primitive data** (lists of `(x,y)` tuples, colors, floats) — never `gamelib` objects — enforcing separation.
+
+### `render/gl_context.py`
+```python
+def create_context(surface_size: tuple[int, int]) -> moderngl.Context:
+    """Called once from main.py after pygame.display.set_mode(...,
+    flags=pygame.OPENGL | pygame.DOUBLEBUF)."""
+```
+
+### `render/shaders.py`
+```python
+def load_program(ctx: moderngl.Context, name: str) -> moderngl.Program:
+    """Reads render/shaders_src/{name}.vert/.frag (game-directory only)."""
+```
+
+### `render/line_batch.py`
+```python
+class LineBatch:
+    def __init__(self, ctx: moderngl.Context, program: moderngl.Program): ...
+    def upload(self, points: list[tuple[float, float]], color: tuple[float,float,float,float]) -> None: ...
+    def draw(self, mode: int = moderngl.LINE_STRIP) -> None: ...
+```
+
+### `render/polygon_mesh.py`
+```python
+class PolygonMesh:
+    def __init__(self, ctx: moderngl.Context, program: moderngl.Program): ...
+    def upload_triangles(self, flat_tris: list[tuple[float,float]]) -> None: ...
+    def draw(self) -> None: ...
+```
+
+### `render/renderer.py`
+```python
+class Renderer:
+    def __init__(self, ctx: moderngl.Context): ...
+    def begin_frame(self) -> None: ...            # clear
+    def draw_border(self, points: list[Point]) -> None: ...
+    def draw_claimed_area(self, tris: list[Point]) -> None: ...
+    def draw_trail(self, points: list[Point]) -> None: ...
+    def draw_marker(self, pos: Point, radius: float, color: tuple) -> None:
+        """Player/enemy drawn as small circle mesh (generated once, transformed via uniform)."""
+    def end_frame(self) -> None: ...               # pygame.display.flip()
+```
+`states/playing_state.py` is the glue: reads `Board`/`Player`/`QixEnemy` state each frame, calls the corresponding `renderer.draw_*` with converted primitives.
+
+---
+
+## 6. `main.py`
+
+```python
+import pygame
+from core.game_context import GameContext
+from core.state_machine import StateMachine
+from core.input import poll
+from render.gl_context import create_context
+from render.renderer import Renderer
+from gamelib.scoring import ScoreBoard
+from states.menu_state import MenuState
+from settings import WINDOW_SIZE, FPS
+
+def main() -> None:
+    pygame.init()
+    pygame.display.set_mode(WINDOW_SIZE, flags=pygame.OPENGL | pygame.DOUBLEBUF)
+    pygame.display.set_caption("Qix Clone")
+
+    gl_ctx = create_context(WINDOW_SIZE)
+    renderer = Renderer(gl_ctx)
+
+    ctx = GameContext(
+        window_size=WINDOW_SIZE,
+        gl_ctx=gl_ctx,
+        renderer=renderer,
+        input_state=poll([]),
+        score=ScoreBoard(),
+    )
+
+    machine = StateMachine(ctx, MenuState())
+    clock = pygame.time.Clock()
+    running = True
+
+    while running:
+        dt = clock.tick(FPS) / 1000.0
+        events = pygame.event.get()
+        if any(e.type == pygame.QUIT for e in events):
+            running = False
+
+        ctx.input_state = poll(events)
+        machine.handle_events(events)
+        machine.update(dt)
+        machine.render()
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## 7. Design Notes / Rationale
+
+- **No circular imports**: strict layering `core → states → gamelib/render`; `gamelib` and `render` are siblings that never import each other or `states`/`core`. States are the only integration point.
+- **Delta-time**: every `update()` in `gamelib` takes `dt: float` seconds; no entity calls `pygame.time` or `time.time()` itself, keeping logic deterministic and testable.
+- **Explicit states**: `StateID` enum + concrete `State` classes implementing a `Protocol`; transitions via `next()` polled by `StateMachine`, avoiding scattered global flags.
+- **ModernGL isolation**: all GL calls confined to `render/`; `gamelib` remains headless-testable (pure functions/dataclasses), satisfying separation of concerns.
+- **DRY**: shared geometry math centralized in `grid_geometry.py` and `polygon_fill.py`, reused by `Board`, `Player` (edge clamping), and `Sparx`/`QixEnemy` collision checks.
+- **File access**: `persistence/highscores.py` only reads/writes a JSON file inside the game directory (e.g., `Path(__file__).parent / "highscores.json"`), no network, no `exec`/`eval`, no shell.

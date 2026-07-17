@@ -59,15 +59,17 @@ PLAN_SCHEMA: dict[str, Any] = {
         "core_loop": {"type": "array", "items": {"type": "string"}, "minItems": 3},
         "controls": {"type": "array", "items": {"type": "string"}},
         "quality_bar": {"type": "array", "items": {"type": "string"}, "minItems": 4},
-        "dependencies": {"type": "array", "maxItems": 8, "items": DEPENDENCY_SCHEMA},
+        "dependencies": {"type": "array", "items": DEPENDENCY_SCHEMA},
         "files": {
             "type": "array",
             "minItems": 2,
-            "maxItems": 8,
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9_]*\\.py$"},
+                    "name": {
+                        "type": "string",
+                        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\\.py$",
+                    },
                     "purpose": {"type": "string"},
                     "public_api": {"type": "array", "items": {"type": "string"}},
                 },
@@ -347,8 +349,6 @@ class GameBuilder:
     def _restore_completed_file(self, spec: FileSpec) -> bool:
         journal = self._journal()
         task_name = f"file:{spec.name}"
-        if not journal.task_complete(task_name):
-            return False
         artifact = journal.task_artifact(task_name)
         if not artifact:
             return False
@@ -356,6 +356,8 @@ class GameBuilder:
         if result.get("filename") != spec.name:
             raise WorkspaceError(f"Corrupt file checkpoint for {spec.name}")
         self.workspace.write_python(spec.name, str(result["content"]))
+        if not journal.task_complete(task_name):
+            journal.complete_task(task_name, artifact)
         self.progress(f"  Reusing checkpoint: {spec.name}")
         return True
 
@@ -380,8 +382,9 @@ class GameBuilder:
                 raise WorkspaceError(
                     f"Implementer returned {result['filename']!r}; expected {spec.name!r}"
                 )
-            self.workspace.write_python(spec.name, str(result["content"]))
             artifact = journal.write_json_artifact(f"files/{spec.name}.json", result)
+            journal.set_task_artifact(task_name, artifact)
+            self.workspace.write_python(spec.name, str(result["content"]))
             journal.complete_task(task_name, artifact)
             return spec.name
         except BaseException as exc:
@@ -436,7 +439,7 @@ class GameBuilder:
         module = result.missing_module
         if result.ok or not module:
             return result
-        if module in {spec.name.removesuffix(".py") for spec in plan.files}:
+        if module in {Path(spec.name).stem for spec in plan.files}:
             return result
         if plan.dependency_for_import(module):
             return result

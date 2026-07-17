@@ -1,0 +1,250 @@
+{
+  "title": "Qix Clone: Ink & Exposure",
+  "pitch": "Claim 75% of a shrinking field before the ink runs out or the Qix catches your line. Fast claims are safe but small; bold claims are big but slow to draw and lethal if cut off. One input scheme, two enemy types, synthesized-style feedback via GPU-rendered glow and shape \u2014 commit to a cut, and live with the exposure.",
+  "core_loop": [
+    "Stand on safe claimed border, read Qix trajectory and Sparx patrol timing",
+    "Push into open space to start drawing a trail; every frame exposed is risk (Qix or Sparx can kill you)",
+    "Choose cut length/angle: short safe claim vs long bold claim; optionally hold Shift for a fast but uncontrollable dash",
+    "Reconnect trail to border: Board.commit_trail splits polygon via polygon_fill, claims the enclosed area, updates percent_claimed and score with a claim feedback beat",
+    "Escalate: Qix speed/turn-rate and Sparx count/speed ratchet up per level and via soft 20s timer pressure; repeat until area% target reached or lives exhausted"
+  ],
+  "controls": [
+    "Arrow keys / WASD: move head (4-directional intent)",
+    "Moving along claimed border = safe walking (auto)",
+    "Moving into unclaimed space = auto-drawing trail (no separate draw button)",
+    "Left Shift: fast draw (1.5x speed, brief no-turn commitment window) - risk/reward knob",
+    "Escape/P: pause",
+    "Enter: confirm on menu/game-over screens"
+  ],
+  "quality_bar": [
+    "Delta-time movement everywhere: all gamelib update(dt) calls use seconds-as-float from one Clock.tick in main.py; no entity reads wall-clock directly",
+    "Strict layering with zero circular imports: core -> states -> {gamelib, render}; gamelib and render never import each other, states, or pygame/moderngl types beyond primitives",
+    "gamelib is pure Python and headless-testable (dataclasses/functions only, no pygame/moderngl imports); render only consumes primitive tuples/floats/colors, never gamelib objects",
+    "Explicit state machine with StateID enum and State Protocol (on_enter/on_exit/handle_events/update/render/next); no scattered boolean mode flags",
+    "All persistence and shader loading confined to paths under the game directory (Path(__file__).parent-relative); no network access, shell commands, or dynamic code execution",
+    "Collision/geometry logic centralized in grid_geometry.py and polygon_fill.py and reused by Board, Player, Sparx, QixEnemy to keep DRY"
+  ],
+  "files": [
+    {
+      "name": "main.py",
+      "purpose": "Single entry point: initializes pygame + GL context, builds GameContext, runs the fixed-timestep loop calling StateMachine.handle_events/update/render",
+      "public_api": [
+        "main() -> None"
+      ]
+    },
+    {
+      "name": "settings.py",
+      "purpose": "Static constants: window size, FPS, colors, speeds, area% targets per level",
+      "public_api": [
+        "WINDOW_SIZE",
+        "FPS",
+        "BASE_QIX_SPEED",
+        "BASE_SPARX_SPEED",
+        "AREA_TARGETS"
+      ]
+    },
+    {
+      "name": "core/game_context.py",
+      "purpose": "Mutable world handle passed to every state; holds gl context, renderer, input state, score, rng seed",
+      "public_api": [
+        "GameContext"
+      ]
+    },
+    {
+      "name": "core/state_machine.py",
+      "purpose": "Drives current State: dispatches events/update/render and swaps state based on State.next()",
+      "public_api": [
+        "StateMachine"
+      ]
+    },
+    {
+      "name": "core/input.py",
+      "purpose": "Pure translation of pygame events into an InputState dataclass; single point of pygame.event coupling",
+      "public_api": [
+        "InputState",
+        "poll(events) -> InputState"
+      ]
+    },
+    {
+      "name": "core/clock.py",
+      "purpose": "Thin wrapper documenting the dt convention (seconds as float) used across the codebase; helper for fixed max-dt clamping",
+      "public_api": [
+        "clamp_dt(raw_dt: float, max_dt: float = 0.05) -> float"
+      ]
+    },
+    {
+      "name": "states/base.py",
+      "purpose": "State Protocol and StateID enum defining explicit game states and transition contract",
+      "public_api": [
+        "StateID",
+        "State"
+      ]
+    },
+    {
+      "name": "states/menu_state.py",
+      "purpose": "Title/menu screen: shows instructions, waits for confirm to start PlayingState",
+      "public_api": [
+        "MenuState"
+      ]
+    },
+    {
+      "name": "states/playing_state.py",
+      "purpose": "Core gameplay glue: updates Board/Player/QixEnemy/Sparx from gamelib, converts their primitive geometry to Renderer draw calls, handles pause/death transitions",
+      "public_api": [
+        "PlayingState"
+      ]
+    },
+    {
+      "name": "states/paused_state.py",
+      "purpose": "Freezes gameplay update, renders paused overlay, resumes on unpause input",
+      "public_api": [
+        "PausedState"
+      ]
+    },
+    {
+      "name": "states/game_over_state.py",
+      "purpose": "Shows final score/area%, writes high score via persistence, returns to MenuState on confirm",
+      "public_api": [
+        "GameOverState"
+      ]
+    },
+    {
+      "name": "gamelib/grid_geometry.py",
+      "purpose": "Pure geometry primitives shared across board/player/enemies: point-in-polygon, segment intersection, polygon area",
+      "public_api": [
+        "Point",
+        "point_in_polygon(p, poly) -> bool",
+        "segment_intersects(a1, a2, b1, b2) -> Point | None",
+        "polygon_area(poly) -> float"
+      ]
+    },
+    {
+      "name": "gamelib/polygon_fill.py",
+      "purpose": "Splits claimed border polygon by a committed trail path and triangulates resulting fill regions for rendering/area calc",
+      "public_api": [
+        "split_polygon_by_path(border, path) -> tuple[list, list]",
+        "triangulate(poly) -> list[Point]"
+      ]
+    },
+    {
+      "name": "gamelib/board.py",
+      "purpose": "Owns claimed polygons, border, and active trail; resolves claim commits and exposes percent_claimed",
+      "public_api": [
+        "Board",
+        "Board.claimed_polygons",
+        "Board.border",
+        "Board.active_trail",
+        "Board.start_trail(origin)",
+        "Board.extend_trail(point)",
+        "Board.commit_trail(exit_point, side_hint) -> float",
+        "Board.cancel_trail()",
+        "Board.percent_claimed() -> float"
+      ]
+    },
+    {
+      "name": "gamelib/player.py",
+      "purpose": "Player entity with dt-based movement constrained to border-walk or trail-draw modes per Qix rules",
+      "public_api": [
+        "Player",
+        "Player.update(dt, input_state, board) -> None"
+      ]
+    },
+    {
+      "name": "gamelib/enemies.py",
+      "purpose": "QixEnemy erratic bouncing polygon confined to unclaimed space, speed/turn-rate scale with level",
+      "public_api": [
+        "QixEnemy",
+        "QixEnemy.update(dt, board) -> None"
+      ]
+    },
+    {
+      "name": "gamelib/sparx.py",
+      "purpose": "Sparx enemies patrolling the claimed border at increasing speed/count with level escalation",
+      "public_api": [
+        "Sparx",
+        "Sparx.update(dt, board) -> None"
+      ]
+    },
+    {
+      "name": "gamelib/scoring.py",
+      "purpose": "Tracks score, lives, and area-claim rewards (bonus for fast-draw risk)",
+      "public_api": [
+        "ScoreBoard",
+        "ScoreBoard.add_area(percent, fast_draw) -> None"
+      ]
+    },
+    {
+      "name": "render/gl_context.py",
+      "purpose": "Creates the moderngl.Context bound to the pygame OPENGL surface",
+      "public_api": [
+        "create_context(surface_size) -> moderngl.Context"
+      ]
+    },
+    {
+      "name": "render/shaders.py",
+      "purpose": "Loads and compiles vertex/fragment shader pairs from render/shaders_src/ into moderngl programs",
+      "public_api": [
+        "load_program(ctx, name) -> moderngl.Program"
+      ]
+    },
+    {
+      "name": "render/line_batch.py",
+      "purpose": "GPU line-strip drawing primitive for border/trail visuals",
+      "public_api": [
+        "LineBatch",
+        "LineBatch.upload(points, color) -> None",
+        "LineBatch.draw(mode=moderngl.LINE_STRIP) -> None"
+      ]
+    },
+    {
+      "name": "render/polygon_mesh.py",
+      "purpose": "GPU triangle mesh primitive for filled claimed-area visuals",
+      "public_api": [
+        "PolygonMesh",
+        "PolygonMesh.upload_triangles(flat_tris) -> None",
+        "PolygonMesh.draw() -> None"
+      ]
+    },
+    {
+      "name": "render/renderer.py",
+      "purpose": "High-level draw API consuming only primitive tuples/colors; wraps LineBatch/PolygonMesh and marker circles, manages frame begin/end",
+      "public_api": [
+        "Renderer",
+        "Renderer.begin_frame() -> None",
+        "Renderer.draw_border(points) -> None",
+        "Renderer.draw_claimed_area(tris) -> None",
+        "Renderer.draw_trail(points) -> None",
+        "Renderer.draw_marker(pos, radius, color) -> None",
+        "Renderer.end_frame() -> None"
+      ]
+    },
+    {
+      "name": "persistence/highscores.py",
+      "purpose": "Reads/writes local JSON high-score file inside the game directory only",
+      "public_api": [
+        "load_highscores() -> list[dict]",
+        "save_highscore(entry: dict) -> None"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "distribution": "numpy",
+      "import_name": "numpy",
+      "version": ">=1.26,<2.0",
+      "reason": "Efficient construction and per-frame upload of vertex buffers (triangulated fill polygons, batched line strips) to moderngl VBOs"
+    },
+    {
+      "distribution": "pygame-ce",
+      "import_name": "pygame",
+      "version": ">=2.5,<3",
+      "reason": "Required Pygame runtime"
+    },
+    {
+      "distribution": "moderngl",
+      "import_name": "moderngl",
+      "version": ">=5.12,<6",
+      "reason": "Requested ModernGL renderer"
+    }
+  ]
+}

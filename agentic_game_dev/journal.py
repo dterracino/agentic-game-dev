@@ -98,6 +98,10 @@ class RunJournal:
         self.state["last_error"] = None
         self._save()
 
+    def set_task_artifact(self, name: str, artifact: str) -> None:
+        task = self.state.setdefault("tasks", {}).setdefault(name, {})
+        task["artifact"] = artifact
+        self._save()
     def complete_task(self, name: str, artifact: str | None = None) -> None:
         task = self.state.setdefault("tasks", {}).setdefault(name, {})
         task.update({"status": "complete", "completed_at": _now(), "error": None})

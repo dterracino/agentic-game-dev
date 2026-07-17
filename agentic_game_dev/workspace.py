@@ -5,12 +5,12 @@ import json
 import os
 import re
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .models import GamePlan
 
 
-SAFE_FILENAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*\.py$")
+SAFE_PATH_PART = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_SUPPORT_FILES = {".gitignore", "requirements.txt"}
 
 
@@ -47,10 +47,21 @@ class GameWorkspace:
             raise WorkspaceError(f"No resumable run found in: {self.root}")
 
     def path_for(self, filename: str) -> Path:
-        if not SAFE_FILENAME.fullmatch(filename):
+        if "\\" in filename or ":" in filename:
             raise WorkspaceError(f"Unsafe generated filename: {filename!r}")
-        path = (self.root / filename).resolve()
-        if path.parent != self.root:
+        relative = PurePosixPath(filename)
+        parts = relative.parts
+        if (
+            relative.is_absolute()
+            or not parts
+            or any(part in {"", ".", ".."} for part in parts)
+            or not relative.name.endswith(".py")
+            or not SAFE_PATH_PART.fullmatch(relative.name.removesuffix(".py"))
+            or any(not SAFE_PATH_PART.fullmatch(part) for part in parts[:-1])
+        ):
+            raise WorkspaceError(f"Unsafe generated filename: {filename!r}")
+        path = self.root.joinpath(*parts).resolve()
+        if self.root not in path.parents:
             raise WorkspaceError(f"File escapes output directory: {filename!r}")
         return path
 
@@ -80,8 +91,9 @@ class GameWorkspace:
 
     def read_python_files(self) -> dict[str, str]:
         return {
-            path.name: path.read_text(encoding="utf-8")
-            for path in sorted(self.root.glob("*.py"))
+            path.relative_to(self.root).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted(self.root.rglob("*.py"))
+            if ".venv" not in path.relative_to(self.root).parts
         }
 
     @staticmethod

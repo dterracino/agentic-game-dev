@@ -202,5 +202,22 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             )
 
 
+    def test_plan_file_count_is_not_artificially_limited(self) -> None:
+        files = [FileSpec("main.py", "entry")]
+        files.extend(
+            FileSpec(f"systems/system_{index}.py", f"system {index}")
+            for index in range(24)
+        )
+        plan = GamePlan(
+            title="Many responsibilities",
+            pitch="Separated systems",
+            core_loop=["a", "b", "c"],
+            controls=[],
+            quality_bar=["a", "b", "c", "d"],
+            files=files,
+        )
+
+        GameBuilder._validate_plan(plan)
+
 if __name__ == "__main__":
     unittest.main()

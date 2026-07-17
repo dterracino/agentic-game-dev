@@ -13,10 +13,36 @@ class WorkspaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")
             workspace.prepare(replace=False)
-            for name in ("../escape.py", "folder/file.py", "not-python.txt", "_hidden.py"):
+            unsafe = (
+                "../escape.py",
+                "/absolute.py",
+                "C:/drive.py",
+                "folder\\file.py",
+                "folder/../escape.py",
+                "not-python.txt",
+                "bad-dir!/file.py",
+            )
+            for name in unsafe:
                 with self.subTest(name=name):
                     with self.assertRaises(WorkspaceError):
                         workspace.path_for(name)
+
+    def test_writes_nested_python_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(replace=False)
+
+            workspace.write_python(
+                "game/core/constants.py",
+                "SCREEN_WIDTH = 1280\n",
+            )
+            workspace.write_python("game/__init__.py", '"""Game package."""\n')
+
+            self.assertTrue((workspace.root / "game" / "core" / "constants.py").is_file())
+            self.assertEqual(
+                sorted(workspace.read_python_files()),
+                ["game/__init__.py", "game/core/constants.py"],
+            )
 
     def test_writes_plan_and_valid_python(self) -> None:
         plan = GamePlan(

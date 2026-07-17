@@ -7,11 +7,13 @@ The current release intentionally uses one planning round while the new recovery
 ## Core behavior
 
 - Designer and architect proposals are checkpointed independently.
+- Adaptive-thinking models use medium effort with enough output headroom for a final answer.
 - The final plan declares exact file APIs and every third-party dependency.
 - A requirements.txt file is written before dependency approval.
 - Each game receives its own .venv.
 - The coordinator asks before installing structured dependencies by default.
 - Every successful implementation response is written immediately.
+- Plans have no fixed file-count cap; responsibilities determine project structure.
 - Interrupted runs resume only missing or failed work.
 - Validation and gameplay use the generated game's interpreter.
 - Missing imports pause for dependency approval before code is rewritten.

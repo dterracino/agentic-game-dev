@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "status": "complete",
+  "stage": "complete",
+  "created_at": "2026-07-17T03:53:48.884417+00:00",
+  "updated_at": "2026-07-17T05:17:13.146873+00:00",
+  "brief": "A Qix clone",
+  "model": "claude-sonnet-5",
+  "renderer": "moderngl",
+  "repair_attempts": 2,
+  "smoke_timeout": 8.0,
+  "tasks": {
+    "designer": {
+      "status": "complete",
+      "started_at": "2026-07-17T03:53:48.885416+00:00",
+      "error": null,
+      "completed_at": "2026-07-17T03:54:46.274274+00:00",
+      "artifact": "artifacts/planning/designer.txt"
+    },
+    "architecture": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:09:20.074101+00:00",
+      "error": null,
+      "failed_at": "2026-07-17T05:05:54.648696+00:00",
+      "completed_at": "2026-07-17T05:10:03.216083+00:00",
+      "artifact": "artifacts/planning/architecture.txt"
+    },
+    "run": {
+      "status": "failed",
+      "failed_at": "2026-07-17T05:05:54.649705+00:00",
+      "error": "Streaming is required for operations that may take longer than 10 minutes. See https://github.com/anthropics/anthropic-sdk-python#long-requests for more details"
+    },
+    "plan": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:10:03.217093+00:00",
+      "error": null,
+      "completed_at": "2026-07-17T05:10:35.367523+00:00",
+      "artifact": "artifacts/planning/plan.json"
+    },
+    "environment": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:33.542125+00:00",
+      "error": null,
+      "completed_at": "2026-07-17T05:16:43.286877+00:00"
+    },
+    "file:main.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.286877+00:00",
+      "error": null,
+      "artifact": "artifacts/files/main.py.json",
+      "completed_at": "2026-07-17T05:16:51.819060+00:00"
+    },
+    "file:settings.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.290895+00:00",
+      "error": null,
+      "artifact": "artifacts/files/settings.py.json",
+      "completed_at": "2026-07-17T05:16:56.628752+00:00"
+    },
+    "file:core/game_context.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.290895+00:00",
+      "error": null,
+      "artifact": "artifacts/files/core/game_context.py.json",
+      "completed_at": "2026-07-17T05:16:50.999656+00:00"
+    },
+    "file:core/state_machine.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.290895+00:00",
+      "error": null,
+      "artifact": "artifacts/files/core/state_machine.py.json",
+      "completed_at": "2026-07-17T05:16:50.895232+00:00"
+    },
+    "file:core/input.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.296465+00:00",
+      "error": null,
+      "artifact": "artifacts/files/core/input.py.json",
+      "completed_at": "2026-07-17T05:16:56.647291+00:00"
+    },
+    "file:core/clock.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.298326+00:00",
+      "error": null,
+      "artifact": "artifacts/files/core/clock.py.json",
+      "completed_at": "2026-07-17T05:16:52.218244+00:00"
+    },
+    "file:states/base.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.299355+00:00",
+      "error": null,
+      "artifact": "artifacts/files/states/base.py.json",
+      "completed_at": "2026-07-17T05:16:52.316049+00:00"
+    },
+    "file:states/menu_state.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.301354+00:00",
+      "error": null,
+      "artifact": "artifacts/files/states/menu_state.py.json",
+      "completed_at": "2026-07-17T05:16:51.689847+00:00"
+    },
+    "file:states/playing_state.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.301354+00:00",
+      "error": null,
+      "artifact": "artifacts/files/states/playing_state.py.json",
+      "completed_at": "2026-07-17T05:17:02.422128+00:00"
+    },
+    "file:states/paused_state.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.305588+00:00",
+      "error": null,
+      "artifact": "artifacts/files/states/paused_state.py.json",
+      "completed_at": "2026-07-17T05:16:50.423892+00:00"
+    },
+    "file:states/game_over_state.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.307771+00:00",
+      "error": null,
+      "artifact": "artifacts/files/states/game_over_state.py.json",
+      "completed_at": "2026-07-17T05:16:51.503472+00:00"
+    },
+    "file:gamelib/grid_geometry.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.310794+00:00",
+      "error": null,
+      "artifact": "artifacts/files/gamelib/grid_geometry.py.json",
+      "completed_at": "2026-07-17T05:16:58.824832+00:00"
+    },
+    "file:gamelib/polygon_fill.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.312811+00:00",
+      "error": null,
+      "artifact": "artifacts/files/gamelib/polygon_fill.py.json",
+      "completed_at": "2026-07-17T05:17:12.647810+00:00"
+    },
+    "file:gamelib/board.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.314815+00:00",
+      "error": null,
+      "artifact": "artifacts/files/gamelib/board.py.json",
+      "completed_at": "2026-07-17T05:17:09.930088+00:00"
+    },
+    "file:gamelib/player.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.316784+00:00",
+      "error": null,
+      "artifact": "artifacts/files/gamelib/player.py.json",
+      "completed_at": "2026-07-17T05:17:10.543457+00:00"
+    },
+    "file:gamelib/enemies.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.318785+00:00",
+      "error": null,
+      "artifact": "artifacts/files/gamelib/enemies.py.json",
+      "completed_at": "2026-07-17T05:17:03.440851+00:00"
+    },
+    "file:gamelib/sparx.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.320784+00:00",
+      "error": null,
+      "artifact": "artifacts/files/gamelib/sparx.py.json",
+      "completed_at": "2026-07-17T05:16:57.609629+00:00"
+    },
+    "file:gamelib/scoring.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.323780+00:00",
+      "error": null,
+      "artifact": "artifacts/files/gamelib/scoring.py.json",
+      "completed_at": "2026-07-17T05:16:51.443242+00:00"
+    },
+    "file:render/gl_context.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.325781+00:00",
+      "error": null,
+      "artifact": "artifacts/files/render/gl_context.py.json",
+      "completed_at": "2026-07-17T05:16:51.042463+00:00"
+    },
+    "file:render/shaders.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.327778+00:00",
+      "error": null,
+      "artifact": "artifacts/files/render/shaders.py.json",
+      "completed_at": "2026-07-17T05:16:53.445299+00:00"
+    },
+    "file:render/line_batch.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.330782+00:00",
+      "error": null,
+      "artifact": "artifacts/files/render/line_batch.py.json",
+      "completed_at": "2026-07-17T05:16:53.482391+00:00"
+    },
+    "file:render/polygon_mesh.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.332913+00:00",
+      "error": null,
+      "artifact": "artifacts/files/render/polygon_mesh.py.json",
+      "completed_at": "2026-07-17T05:16:55.041211+00:00"
+    },
+    "file:render/renderer.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.334882+00:00",
+      "error": null,
+      "artifact": "artifacts/files/render/renderer.py.json",
+      "completed_at": "2026-07-17T05:16:56.032494+00:00"
+    },
+    "file:persistence/highscores.py": {
+      "status": "complete",
+      "started_at": "2026-07-17T05:16:43.336896+00:00",
+      "error": null,
+      "artifact": "artifacts/files/persistence/highscores.py.json",
+      "completed_at": "2026-07-17T05:16:51.983005+00:00"
+    },
+    "validation": {
+      "status": "complete",
+      "completed_at": "2026-07-17T05:17:13.145872+00:00",
+      "error": null
+    }
+  },
+  "last_error": null
+}

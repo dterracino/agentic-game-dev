@@ -24,7 +24,11 @@ class ValidationResult:
 
 def validate_project(root: Path) -> ValidationResult:
     errors: list[str] = []
-    files = sorted(root.glob("*.py"))
+    files = [
+        path
+        for path in sorted(root.rglob("*.py"))
+        if ".venv" not in path.relative_to(root).parts
+    ]
     if not (root / "main.py").is_file():
         errors.append("main.py is missing")
 
@@ -32,7 +36,7 @@ def validate_project(root: Path) -> ValidationResult:
         try:
             ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
         except (OSError, SyntaxError) as exc:
-            errors.append(f"{path.name}: {exc}")
+            errors.append(f"{path.relative_to(root).as_posix()}: {exc}")
 
     if errors:
         return ValidationResult(False, "\n".join(errors))
