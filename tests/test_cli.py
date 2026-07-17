@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from agentic_game_dev.cli import _load_environment, build_parser
+from agentic_game_dev.cli import _load_environment, _resolve_model, build_parser
 
 
 class CliEnvironmentTests(unittest.TestCase):
@@ -27,6 +27,30 @@ class CliEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(args.design_iterations, 3)
         self.assertEqual(args.implementation_iterations, 2)
+
+    def test_ollama_options_and_model_environment(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--provider",
+                "ollama",
+                "--ollama-host",
+                "http://192.168.1.25:11434",
+                "create",
+                "A game",
+            ]
+        )
+        with patch.dict("os.environ", {"OLLAMA_MODEL": "qwen-test"}, clear=False):
+            model = _resolve_model(args.provider, args.model)
+
+        self.assertEqual(model, "qwen-test")
+        self.assertEqual(args.ollama_host, "http://192.168.1.25:11434")
+
+    def test_ollama_requires_a_configured_model(self) -> None:
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            self.assertRaisesRegex(RuntimeError, "OLLAMA_MODEL"),
+        ):
+            _resolve_model("ollama", None)
 
     def test_resume_parses_additional_repair_budget(self) -> None:
         args = build_parser().parse_args(["resume", "--add-repair-attempts", "2"])

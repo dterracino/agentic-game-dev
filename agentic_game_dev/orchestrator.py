@@ -15,6 +15,7 @@ from .workspace import GameWorkspace, WorkspaceError
 
 class Provider(Protocol):
     model: str
+    provider_name: str
 
     async def text(self, *, role: str, prompt: str) -> str: ...
 
@@ -38,6 +39,7 @@ class Environment(Protocol):
 
 
 DependencyApprover = Callable[[Sequence[DependencySpec], str], bool]
+QAApprover = Callable[[str, Path], bool]
 
 
 DEPENDENCY_SCHEMA: dict[str, Any] = {
@@ -88,6 +90,41 @@ PLAN_SCHEMA: dict[str, Any] = {
         "dependencies",
         "files",
     ],
+    "additionalProperties": False,
+}
+
+QA_CONTRACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "criteria": {
+            "type": "array",
+            "minItems": 6,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "requirement": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    "automated_test": {"type": "string"},
+                    "scripted_playtest": {"type": "string"},
+                    "visual_evidence": {"type": "string"},
+                    "blocking": {"type": "boolean"},
+                },
+                "required": [
+                    "id",
+                    "requirement",
+                    "rationale",
+                    "automated_test",
+                    "scripted_playtest",
+                    "visual_evidence",
+                    "blocking",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "criteria"],
     "additionalProperties": False,
 }
 
@@ -153,22 +190,37 @@ and audio assets must be drawn or synthesized in code. Be concrete and challenge
 ARCHITECT_ROLE = """You are a senior Python game architect. Produce a compact, coherent plan for
 Python 3.11+ using Pygame, with ModernGL only when requested. Enforce separation of concerns and
 DRY without over-engineering. Define exact cross-file APIs, a main.py main() entry point, delta-time
-movement, explicit game states, and no circular imports. Declare every third-party dependency with
+movement, explicit game states, and no circular imports. Order planned files from foundational
+modules through consumers, with main.py last, so one lead developer can build them sequentially.
+Declare every third-party dependency with
 its PyPI distribution, Python import name, version constraint, and reason. Prefer the standard
 library unless a dependency materially improves the game. Require main.py to configure standard
 logging to game.log, log uncaught startup/runtime exceptions, and re-raise them. It must never call
 sys.exit() from a finally block or otherwise turn failures into successful exits. Never propose
-shell commands, network access, dynamic code execution, or file access outside the game directory."""
+shell commands, network access, dynamic code execution, or file access outside the game
+directory."""
 
-IMPLEMENTER_ROLE = """You are an expert Python game developer. Implement exactly one complete file
-from an agreed plan. Return executable source, not a sketch: no TODOs, ellipses, missing bodies, or
-external assets. Use type hints, separation of concerns, delta time, clamped frame spikes, and
-defensive Pygame initialization. Respect every declared cross-file API. Import third-party packages
-only when they appear in the plan's declared dependency list. Do not use network, subprocess, eval,
-exec, pickle, or package installation. Filesystem writes are limited to explicitly planned local
-persistence and project-local diagnostic logs. main.py must expose main(), configure game.log,
-preserve and log uncaught exceptions, never call sys.exit() from finally, and only run main() under
-an __name__ guard."""
+QA_AUTHOR_ROLE = """You are an independent senior gameplay QA author. Before implementation,
+translate the brief, final design, and architecture into observable acceptance criteria that prove
+the actual game was built. Cover the complete core loop, controls, game-state transitions, geometry
+and collision invariants, enemy behavior, progression, failure/restart paths, readable presentation,
+and runtime stability. Every criterion must state an automated test, a scripted playtest, and visual
+evidence where applicable. A process merely remaining alive is never proof of correct gameplay.
+Mark failures that invalidate the promised game as blocking. Do not adapt requirements to an
+implementation because implementation has not started."""
+
+IMPLEMENTER_ROLE = """You are the single lead Python game developer responsible for the coherent
+implementation of the entire project. Work through the approved plan in dependency order, retaining
+ownership of all cross-file contracts and gameplay invariants even when concerns live in separate
+modules. For the current checkpoint, return exactly one complete file integrated with every file
+already implemented and every file still planned. Return executable source, not a sketch: no TODOs,
+ellipses, missing bodies, or external assets. Use type hints, separation of concerns, delta time,
+clamped frame spikes, and defensive Pygame initialization. Satisfy the approved QA acceptance
+contract. Import third-party packages only when they appear in the plan's declared dependency list.
+Do not use network, subprocess, eval, exec, pickle, or package installation. Filesystem writes are
+limited to explicitly planned local persistence and project-local diagnostic logs. main.py must
+expose main(), configure game.log, preserve and log uncaught exceptions, never call sys.exit() from
+finally, and only run main() under an __name__ guard."""
 
 GAMEPLAY_REVIEWER_ROLE = """You are a critical game-design implementation reviewer. Assess the
 complete implemented project against its original brief and final design. Focus on whether the
@@ -179,7 +231,8 @@ not claim to have visually played the game. Return a concise, prioritized assess
 TECHNICAL_REVIEWER_ROLE = """You are a senior Python game-engineering reviewer. Assess the complete
 project for correctness, separation of concerns, DRY design, coherent APIs, frame-rate independence,
 state transitions, collision and resource handling, renderer usage, and maintainability. Identify
-specific high-impact changes. Use validation output as evidence and do not invent runtime results."""
+specific high-impact changes. Use validation output as evidence and do not invent runtime
+results."""
 
 ITERATION_ARCHITECT_ROLE = """You are the lead architect for an implementation improvement round.
 Reconcile gameplay and technical reviews into a focused updated build contract. Preserve every
@@ -193,7 +246,8 @@ Prioritize crashes, import/API mismatches, unwinnable or unclear play, frame-rat
 missing state transitions, bad collision logic, weak feedback, immediate clean exits, and exception
 handlers or finally blocks that mask failures. Preserve the architecture and declared dependency
 policy. Never introduce undeclared packages, external assets, network,
-subprocess, eval, exec, pickle, package installation, or filesystem writes beyond planned local persistence and diagnostic logs."""
+subprocess, eval, exec, pickle, package installation, or filesystem writes beyond planned local
+persistence and diagnostic logs."""
 
 
 class GameBuilder:
@@ -209,6 +263,7 @@ class GameBuilder:
         implementation_iterations: int = 0,
         environment: Environment | None = None,
         dependency_approver: DependencyApprover | None = None,
+        qa_approver: QAApprover | None = None,
         progress: Callable[[str], None] = print,
     ) -> None:
         self.provider = provider
@@ -221,6 +276,7 @@ class GameBuilder:
         self.progress = progress
         self.environment = environment or GameEnvironment(workspace.root, progress=progress)
         self.dependency_approver = dependency_approver or (lambda _deps, _reason: False)
+        self.qa_approver = qa_approver or (lambda _contract, _path: True)
         self.journal: RunJournal | None = None
 
     async def create(self, brief: str, *, replace: bool = False) -> ValidationResult:
@@ -233,6 +289,8 @@ class GameBuilder:
             self.workspace.root,
             brief=brief,
             model=self.provider.model,
+            provider=self.provider.provider_name,
+            provider_host=str(getattr(self.provider, "host", "")),
             renderer=self.renderer,
             repair_attempts=self.repair_attempts,
             smoke_timeout=self.smoke_timeout,
@@ -249,9 +307,14 @@ class GameBuilder:
         self.workspace.prepare_resume()
         self.journal = RunJournal.load(self.workspace.root)
         expected_model = str(self.journal.state["model"])
-        if self.provider.model != expected_model:
+        expected_provider = str(self.journal.state.get("provider", "anthropic"))
+        if (
+            self.provider.model != expected_model
+            or self.provider.provider_name != expected_provider
+        ):
             raise WorkspaceError(
-                f"Run uses model {expected_model!r}, but provider uses {self.provider.model!r}"
+                f"Run uses {expected_provider}/{expected_model}, but provider uses "
+                f"{self.provider.provider_name}/{self.provider.model}"
             )
         self.renderer = str(self.journal.state["renderer"])
         self.repair_attempts = int(self.journal.state["repair_attempts"])
@@ -293,28 +356,43 @@ class GameBuilder:
         plan = await self._plan_checkpoint(brief, design, architecture)
         self.workspace.write_plan(plan)
 
+        journal.set_stage("qa_contract")
+        self.progress("[3/8] QA author is defining executable gameplay acceptance criteria...")
+        qa_contract = await self._qa_contract_checkpoint(brief, design, architecture, plan)
+        qa_path = self.workspace.root / "QA_ACCEPTANCE.md"
+        self.workspace.write_support_file("QA_ACCEPTANCE.md", qa_contract)
+        if not bool(journal.state.get("qa_approved", False)):
+            self.progress("")
+            self.progress(qa_contract)
+            self.progress("")
+            if not self.qa_approver(qa_contract, qa_path):
+                raise WorkspaceError(
+                    "QA acceptance contract was not approved. The design and QA checkpoints are "
+                    "saved; resume the run when ready to review it again."
+                )
+            journal.approve_qa_contract()
+            self.progress("QA acceptance contract approved.")
+        else:
+            self.progress("  Reusing approved QA acceptance contract.")
+
         journal.set_stage("environment")
-        self.progress("[3/7] Preparing the isolated game environment...")
+        self.progress("[4/8] Preparing the isolated game environment...")
         self._ensure_environment(plan, "Dependencies declared by the game plan")
 
         journal.set_stage("implementation")
         pending = [spec for spec in plan.files if not self._restore_completed_file(spec)]
         if pending:
             self.progress(
-                f"[4/7] {len(pending)} implementation agents are writing checkpointed files..."
+                f"[5/8] Lead game developer is implementing {len(pending)} ordered checkpoints..."
             )
-            outcomes = await asyncio.gather(
-                *(self._generate_file_checkpoint(spec, plan) for spec in pending),
-                return_exceptions=True,
-            )
-            failures = [item for item in outcomes if isinstance(item, BaseException)]
-            if failures:
-                raise failures[0]
+            for number, spec in enumerate(pending, start=1):
+                self.progress(f"  Lead checkpoint {number}/{len(pending)}: {spec.name}")
+                await self._generate_file_checkpoint(spec, plan, qa_contract)
         else:
-            self.progress("[4/7] All initial implementation files restored from checkpoints.")
+            self.progress("[5/8] All lead-developer checkpoints restored.")
 
         journal.set_stage("initial_validation")
-        self.progress("[5/7] Validating and repairing the initial implementation...")
+        self.progress("[6/8] Validating and repairing the initial implementation...")
         result = await self._validate_and_repair(plan)
         if not result.ok:
             journal.fail_task("validation", result.report)
@@ -323,11 +401,11 @@ class GameBuilder:
         journal.set_stage("implementation_iterations")
         if self.implementation_iterations:
             self.progress(
-                f"[6/7] Running {self.implementation_iterations} implementation improvement "
+                f"[7/8] Running {self.implementation_iterations} implementation improvement "
                 f"{'round' if self.implementation_iterations == 1 else 'rounds'}..."
             )
         else:
-            self.progress("[6/7] No implementation improvement rounds requested.")
+            self.progress("[7/8] No implementation improvement rounds requested.")
         for round_number in range(1, self.implementation_iterations + 1):
             plan, result = await self._run_implementation_iteration(
                 round_number, brief, plan, result
@@ -338,7 +416,7 @@ class GameBuilder:
         journal.set_stage("refinements")
         refinements_restored = self._restore_refinement_checkpoints(plan)
         if refinements_restored:
-            self.progress("[7/7] Validating restored user refinements...")
+            self.progress("[8/8] Validating restored user refinements...")
             result = self._handle_missing_dependency(
                 plan, self._run_validation(), plan_task_name="refinement"
             )
@@ -346,7 +424,7 @@ class GameBuilder:
                 journal.fail_task("refinement_validation", result.report)
                 return result
         else:
-            self.progress("[7/7] Final validated project is checkpointed.")
+            self.progress("[8/8] Final validated project is checkpointed.")
 
         journal.set_stage("final_validation")
         self.workspace.write_plan(plan)
@@ -478,9 +556,11 @@ class GameBuilder:
             f"  Implementation round {round_number}/{self.implementation_iterations}: "
             "gameplay and technical reviews"
         )
+        qa_contract = (self.workspace.root / "QA_ACCEPTANCE.md").read_text(encoding="utf-8")
         context = (
             f"Original brief:\n{brief}\n\nFinal design/build contract:\n"
-            f"{current_plan.as_context()}\n\nLatest validation:\n"
+            f"{current_plan.as_context()}\n\nApproved QA contract:\n{qa_contract}\n\n"
+            f"Latest validation:\n"
             f"{previous_validation.report}\n\nComplete project:\n{self._project_snapshot()}"
             f"\n\nDiagnostic log tails:\n{self._diagnostic_logs()}"
         )
@@ -522,26 +602,20 @@ class GameBuilder:
             if not self._restore_iteration_file(round_number, spec)
         ]
         if pending:
-            self.progress(f"    Updating {len(pending)} checkpointed files...")
-            snapshot = self._project_snapshot()
-            outcomes = await asyncio.gather(
-                *(
-                    self._generate_iteration_file_checkpoint(
-                        round_number,
-                        spec,
-                        reason,
-                        plan,
-                        gameplay_review,
-                        technical_review,
-                        snapshot,
-                    )
-                    for spec, reason in pending
-                ),
-                return_exceptions=True,
+            self.progress(
+                f"    Lead developer is updating {len(pending)} ordered checkpoints..."
             )
-            failures = [item for item in outcomes if isinstance(item, BaseException)]
-            if failures:
-                raise failures[0]
+            for number, (spec, reason) in enumerate(pending, start=1):
+                self.progress(f"      Lead checkpoint {number}/{len(pending)}: {spec.name}")
+                await self._generate_iteration_file_checkpoint(
+                    round_number,
+                    spec,
+                    reason,
+                    plan,
+                    gameplay_review,
+                    technical_review,
+                    self._project_snapshot(),
+                )
         else:
             self.progress("    All planned file changes restored from checkpoints.")
 
@@ -748,6 +822,76 @@ class GameBuilder:
             journal.fail_task(task_name, exc)
             raise
 
+    async def _qa_contract_checkpoint(
+        self,
+        brief: str,
+        design: str,
+        architecture: str,
+        plan: GamePlan,
+    ) -> str:
+        journal = self._journal()
+        task_name = "qa_contract"
+        artifact = journal.task_artifact(task_name)
+        if artifact:
+            self.progress("  Reusing checkpoint: QA acceptance contract")
+            raw = journal.read_json_artifact(artifact)
+            if not journal.task_complete(task_name):
+                journal.complete_task(task_name, artifact)
+        else:
+            journal.start_task(task_name)
+            try:
+                raw = await self.provider.structured(
+                    role=QA_AUTHOR_ROLE,
+                    prompt=(
+                        f"Original brief:\n{brief}\n\nFinal design:\n{design}\n\n"
+                        f"Architecture:\n{architecture}\n\nBuild contract:\n{plan.as_context()}\n\n"
+                        "Author the preimplementation QA acceptance contract. Make criteria "
+                        "specific enough that a developer cannot substitute placeholder mechanics."
+                    ),
+                    tool_name="submit_qa_contract",
+                    description=(
+                        "Submit observable, testable preimplementation acceptance criteria."
+                    ),
+                    schema=QA_CONTRACT_SCHEMA,
+                )
+                artifact = journal.write_json_artifact("planning/qa_contract.json", raw)
+                journal.complete_task(task_name, artifact)
+            except BaseException as exc:
+                journal.fail_task(task_name, exc)
+                raise
+        return self._render_qa_contract(raw)
+
+    @staticmethod
+    def _render_qa_contract(raw: dict[str, Any]) -> str:
+        criteria = raw.get("criteria")
+        if not isinstance(criteria, list) or len(criteria) < 1:
+            raise WorkspaceError("QA author returned no acceptance criteria")
+        lines = [
+            "# Gameplay QA Acceptance Contract",
+            "",
+            str(raw.get("summary", "")).strip(),
+            "",
+        ]
+        for number, item in enumerate(criteria, start=1):
+            if not isinstance(item, dict):
+                raise WorkspaceError("QA author returned an invalid acceptance criterion")
+            identifier = str(item.get("id", number)).strip()
+            requirement = str(item.get("requirement", "")).strip()
+            if not requirement:
+                raise WorkspaceError("QA author returned an empty requirement")
+            blocking = "Yes" if bool(item.get("blocking", False)) else "No"
+            lines.extend([
+                f"## {number}. {identifier}: {requirement}",
+                "",
+                f"- Rationale: {str(item.get('rationale', '')).strip()}",
+                f"- Automated test: {str(item.get('automated_test', '')).strip()}",
+                f"- Scripted playtest: {str(item.get('scripted_playtest', '')).strip()}",
+                f"- Visual evidence: {str(item.get('visual_evidence', '')).strip()}",
+                f"- Blocking failure: {blocking}",
+                "",
+            ])
+        return "\n".join(lines).rstrip() + "\n"
+
     async def _plan_checkpoint(
         self,
         brief: str,
@@ -769,8 +913,8 @@ class GameBuilder:
                 prompt=(
                     f"Original brief:\n{brief}\n\nDesigner proposal:\n{design}\n\n"
                     f"Architecture proposal:\n{architecture}\n\nRenderer: {self.renderer}. "
-                    "Resolve conflicts and submit the final build contract. Include main.py exactly "
-                    "once and declare every non-standard-library import."
+                    "Resolve conflicts and submit the final build contract. Include main.py "
+                    "exactly once and declare every non-standard-library import."
                 ),
                 tool_name="submit_game_plan",
                 description="Submit the final implementation and dependency contract.",
@@ -800,7 +944,12 @@ class GameBuilder:
         self.progress(f"  Reusing checkpoint: {spec.name}")
         return True
 
-    async def _generate_file_checkpoint(self, spec: FileSpec, plan: GamePlan) -> str:
+    async def _generate_file_checkpoint(
+        self,
+        spec: FileSpec,
+        plan: GamePlan,
+        qa_contract: str,
+    ) -> str:
         journal = self._journal()
         task_name = f"file:{spec.name}"
         journal.start_task(task_name)
@@ -809,9 +958,14 @@ class GameBuilder:
                 role=IMPLEMENTER_ROLE,
                 prompt=(
                     f"Complete plan:\n{plan.as_context()}\n\n"
+                    f"Approved QA contract:\n{qa_contract}\n\n"
+                    "Project implemented so far:\n"
+                    f"{self._project_snapshot() or '(no files yet)'}\n\n"
+                    f"Your current checkpoint file: {spec.name}\n"
                     f"Your assigned file: {spec.name}\nPurpose: {spec.purpose}\n"
                     f"Required public API: {', '.join(spec.public_api) or 'none'}\n"
-                    "Implement this file so it integrates exactly with the plan."
+                    "Implement this file as the lead developer. Keep all existing and future "
+                    "cross-file contracts coherent and satisfy the approved QA criteria."
                 ),
                 tool_name="submit_python_file",
                 description="Submit the complete source for the assigned Python file.",
@@ -1255,7 +1409,10 @@ class GameBuilder:
         label = "Resuming with options:" if resuming else "Effective options:"
         self.progress(label)
         self.progress(f"  output: {self.workspace.root}")
+        self.progress(f"  provider: {self.provider.provider_name}")
         self.progress(f"  model: {self.provider.model}")
+        if getattr(self.provider, "host", ""):
+            self.progress(f"  provider host: {self.provider.host}")
         self.progress(f"  renderer: {self.renderer}")
         self.progress(f"  design iterations: {self.design_iterations}")
         self.progress(f"  implementation iterations: {self.implementation_iterations}")

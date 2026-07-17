@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 JOURNAL_VERSION = 1
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class JournalError(RuntimeError):
@@ -38,7 +37,9 @@ class RunJournal:
         smoke_timeout: float,
         design_iterations: int = 1,
         implementation_iterations: int = 0,
-    ) -> "RunJournal":
+        provider: str = "anthropic",
+        provider_host: str = "",
+    ) -> RunJournal:
         journal = cls(
             root,
             {
@@ -49,7 +50,10 @@ class RunJournal:
                 "updated_at": _now(),
                 "brief": brief,
                 "model": model,
+                "provider": provider,
+                "provider_host": provider_host,
                 "renderer": renderer,
+                "qa_approved": False,
                 "repair_attempts": repair_attempts,
                 "smoke_timeout": smoke_timeout,
                 "design_iterations": design_iterations,
@@ -64,7 +68,7 @@ class RunJournal:
         return journal
 
     @classmethod
-    def load(cls, root: Path) -> "RunJournal":
+    def load(cls, root: Path) -> RunJournal:
         path = root.resolve() / ".agentic" / "run.json"
         if not path.is_file():
             raise JournalError(f"No resumable run found at: {path}")
@@ -94,6 +98,10 @@ class RunJournal:
 
     def set_stage(self, stage: str) -> None:
         self.state["stage"] = stage
+        self._save()
+
+    def approve_qa_contract(self) -> None:
+        self.state["qa_approved"] = True
         self._save()
 
     def add_repair_attempts(self, count: int) -> None:

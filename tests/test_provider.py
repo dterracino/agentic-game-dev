@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from agentic_game_dev.provider import AgentError, ClaudeProvider
+from agentic_game_dev.provider import AgentError, ClaudeProvider, OllamaProvider
 
 
 class FakeAPIError(Exception):
@@ -23,7 +23,7 @@ class FakeStreamManager:
         self.response = response
         self.error = error
 
-    async def __aenter__(self) -> "FakeStreamManager":
+    async def __aenter__(self) -> FakeStreamManager:
         if self.error is not None:
             raise self.error
         return self
@@ -84,7 +84,56 @@ def provider_with_messages(messages: object) -> ClaudeProvider:
     return provider
 
 
+
+class FakeOllamaResponseError(Exception):
+    pass
+
+
+class FakeOllamaClient:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.kwargs: dict[str, object] = {}
+
+    async def chat(self, **kwargs: object) -> dict[str, object]:
+        self.kwargs = kwargs
+        return {"message": {"content": self.content}}
+
+
+def ollama_provider_with_client(client: FakeOllamaClient) -> OllamaProvider:
+    provider = OllamaProvider.__new__(OllamaProvider)
+    provider.model = "local-coder"
+    provider.host = "http://192.168.1.25:11434"
+    provider.max_tokens = 4096
+    provider.activity = None
+    provider._response_error_type = FakeOllamaResponseError
+    provider._request_error_type = OSError
+    provider._client = client
+    return provider
+
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ollama_structured_uses_schema_and_network_host(self) -> None:
+        client = FakeOllamaClient('{"files": [], "summary": "ok"}')
+        provider = ollama_provider_with_client(client)
+        schema = {
+            "type": "object",
+            "properties": {
+                "files": {"type": "array"},
+                "summary": {"type": "string"},
+            },
+        }
+
+        result = await provider.structured(
+            role="role",
+            prompt="prompt",
+            tool_name="submit",
+            description="description",
+            schema=schema,
+        )
+
+        self.assertEqual(result["summary"], "ok")
+        self.assertEqual(client.kwargs["model"], "local-coder")
+        self.assertEqual(client.kwargs["format"], schema)
+        self.assertEqual(client.kwargs["options"], {"num_predict": 4096})
     async def test_model_not_found_has_actionable_error(self) -> None:
         provider = provider_with_messages(FailingMessages(FakeAPIError(404, "not found")))
         provider.model = "retired-model"

@@ -9,9 +9,8 @@ from pathlib import Path, PurePosixPath
 
 from .models import GamePlan
 
-
 SAFE_PATH_PART = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SAFE_SUPPORT_FILES = {".gitignore", "requirements.txt"}
+SAFE_SUPPORT_FILES = {".gitignore", "requirements.txt", "QA_ACCEPTANCE.md"}
 
 
 class WorkspaceError(RuntimeError):

@@ -1,6 +1,7 @@
 README.md
 pyproject.toml
 agentic_game_dev/__init__.py
+agentic_game_dev/activity.py
 agentic_game_dev/cli.py
 agentic_game_dev/environment.py
 agentic_game_dev/journal.py
@@ -15,6 +16,7 @@ agentic_game_dev.egg-info/dependency_links.txt
 agentic_game_dev.egg-info/entry_points.txt
 agentic_game_dev.egg-info/requires.txt
 agentic_game_dev.egg-info/top_level.txt
+tests/test_activity.py
 tests/test_cli.py
 tests/test_environment.py
 tests/test_journal.py

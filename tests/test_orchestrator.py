@@ -12,7 +12,7 @@ from agentic_game_dev.journal import RunJournal
 from agentic_game_dev.models import DependencySpec, FileSpec, GamePlan
 from agentic_game_dev.orchestrator import GameBuilder
 from agentic_game_dev.validation import ValidationResult
-from agentic_game_dev.workspace import GameWorkspace
+from agentic_game_dev.workspace import GameWorkspace, WorkspaceError
 
 
 class FakeEnvironment:
@@ -31,6 +31,7 @@ class FakeEnvironment:
 
 class FakeProvider:
     model = "test-model"
+    provider_name = "anthropic"
 
     def __init__(
         self,
@@ -43,6 +44,7 @@ class FakeProvider:
         self.failed = False
         self.iteration_failed = False
         self.calls: Counter[str] = Counter()
+        self.game_saw_main_checkpoint = False
         self.files = {
             "main.py": (
                 "import time\n"
@@ -92,6 +94,22 @@ class FakeProvider:
                     {"name": "game.py", "purpose": "Game state", "public_api": ["Game"]},
                 ],
             }
+        if tool_name == "submit_qa_contract":
+            return {
+                "summary": "The core loop must be demonstrably playable.",
+                "criteria": [
+                    {
+                        "id": f"QA-{number}",
+                        "requirement": f"Gameplay requirement {number}",
+                        "rationale": "Proves the promised mechanic.",
+                        "automated_test": "Run a deterministic state assertion.",
+                        "scripted_playtest": "Execute the related input sequence.",
+                        "visual_evidence": "Capture the resulting gameplay state.",
+                        "blocking": True,
+                    }
+                    for number in range(1, 7)
+                ],
+            }
         if tool_name == "submit_iteration_plan":
             return {
                 "updated_plan": {
@@ -124,6 +142,8 @@ class FakeProvider:
         if tool_name == "submit_python_file":
             name = "main.py" if "Your assigned file: main.py" in prompt else "game.py"
             self.calls[f"file:{name}"] += 1
+            if name == "game.py" and "Project implemented so far:" in prompt:
+                self.game_saw_main_checkpoint = "def main():" in prompt
             is_iteration = "Reason for change:" in prompt
             if is_iteration and self.fail_iteration_once and not self.iteration_failed:
                 self.iteration_failed = True
@@ -172,16 +192,59 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.ok, result.report)
             state = RunJournal.load(workspace.root).state
             self.assertEqual(state["status"], "complete")
+            self.assertTrue(state["qa_approved"])
+            self.assertEqual(state["tasks"]["qa_contract"]["status"], "complete")
+            self.assertTrue((workspace.root / "QA_ACCEPTANCE.md").is_file())
             self.assertEqual(state["tasks"]["file:main.py"]["status"], "complete")
             self.assertEqual(state["tasks"]["file:game.py"]["status"], "complete")
+            self.assertTrue(provider.game_saw_main_checkpoint)
             self.assertEqual(environment.ensure_calls, [["pygame-ce>=2.5,<3"]])
             self.assertEqual(
                 (workspace.root / "requirements.txt").read_text(encoding="utf-8"),
                 "pygame-ce>=2.5,<3\n",
             )
             self.assertTrue((workspace.root / ".agentic" / "artifacts").is_dir())
-            self.assertTrue(any("[4/7]" in message for message in messages))
+            self.assertTrue(any("[5/8]" in message for message in messages))
 
+    async def test_rejected_qa_contract_stops_before_implementation_and_resumes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            environment = FakeEnvironment()
+            first = FakeProvider()
+            builder = GameBuilder(
+                first,
+                workspace,
+                environment=environment,
+                dependency_approver=lambda _deps, _reason: True,
+                qa_approver=lambda _contract, _path: False,
+                repair_attempts=0,
+                smoke_timeout=0.05,
+                progress=lambda _message: None,
+            )
+
+            with self.assertRaisesRegex(WorkspaceError, "QA acceptance contract was not approved"):
+                await builder.create("A small game")
+
+            paused = RunJournal.load(workspace.root).state
+            self.assertFalse(paused["qa_approved"])
+            self.assertEqual(paused["tasks"]["qa_contract"]["status"], "complete")
+            self.assertNotIn("file:main.py", paused["tasks"])
+
+            second = FakeProvider()
+            resumed = await GameBuilder(
+                second,
+                workspace,
+                environment=environment,
+                dependency_approver=lambda _deps, _reason: True,
+                qa_approver=lambda _contract, _path: True,
+                repair_attempts=0,
+                smoke_timeout=0.05,
+                progress=lambda _message: None,
+            ).resume()
+
+            self.assertTrue(resumed.ok, resumed.report)
+            self.assertEqual(second.calls["submit_qa_contract"], 0)
+            self.assertTrue(RunJournal.load(workspace.root).state["qa_approved"])
     async def test_resume_reuses_paid_calls_and_completed_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")

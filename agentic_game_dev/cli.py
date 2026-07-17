@@ -7,14 +7,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from .activity import TerminalActivity
 from .environment import GameEnvironment, GameEnvironmentError
 from .journal import JournalError, RunJournal
 from .models import DependencySpec
 from .orchestrator import GameBuilder
-from .provider import AgentError, ClaudeProvider
+from .provider import AgentError, ClaudeProvider, OllamaProvider
 from .validation import run_game
 from .workspace import GameWorkspace, WorkspaceError
-
 
 DEFAULT_MODEL = "claude-sonnet-5"
 
@@ -48,7 +48,27 @@ def build_parser() -> argparse.ArgumentParser:
         prog="agent-game-dev",
         description="Build a checkpointed Pygame game with a coordinated agent team.",
     )
-    parser.add_argument("--model", default=os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL))
+    parser.add_argument(
+        "--provider",
+        choices=("anthropic", "ollama"),
+        default=os.getenv("AGENT_PROVIDER", "anthropic").lower(),
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name; defaults to ANTHROPIC_MODEL or OLLAMA_MODEL for the provider",
+    )
+    parser.add_argument(
+        "--ollama-host",
+        default=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+        help="Ollama server URL, including a server elsewhere on the local network",
+    )
+    parser.add_argument(
+        "--qa-policy",
+        choices=("ask", "approve"),
+        default="ask",
+        help="Display and ask to approve the QA contract, or approve it non-interactively",
+    )
     parser.add_argument("--output", type=Path, default=Path("generated_game"))
     parser.add_argument("--renderer", choices=("pygame", "moderngl"), default="pygame")
     parser.add_argument("--repair-attempts", type=int, default=2)
@@ -63,7 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser("create", help="Design and generate a new game")
     create.add_argument("brief", nargs="?", help="Game description; prompted for when omitted")
-    create.add_argument("--replace", action="store_true", help="Replace a non-empty output directory")
+    create.add_argument(
+        "--replace", action="store_true", help="Replace a non-empty output directory"
+    )
     create.add_argument(
         "--design-iterations",
         type=_positive_int,
@@ -95,9 +117,46 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _require_api_key() -> None:
-    if not os.getenv("ANTHROPIC_API_KEY"):
+def _resolve_model(provider_name: str, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    if provider_name == "ollama":
+        model = os.getenv("OLLAMA_MODEL", "").strip()
+        if not model:
+            raise RuntimeError(
+                "OLLAMA_MODEL is not set. Add it to .env or pass --model for an Ollama run."
+            )
+        return model
+    return os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+
+
+def _require_credentials(provider_name: str) -> None:
+    if provider_name == "anthropic" and not os.getenv("ANTHROPIC_API_KEY"):
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+
+def _make_provider(
+    provider_name: str,
+    model: str,
+    *,
+    ollama_host: str,
+    activity: TerminalActivity,
+):
+    if provider_name == "ollama":
+        return OllamaProvider(model, host=ollama_host, activity=activity)
+    return ClaudeProvider(model, activity=activity)
+
+
+def _qa_approver(policy: str):
+    def approve(_contract: str, path: Path) -> bool:
+        print(f"QA contract saved to: {path}")
+        if policy == "approve":
+            print("QA policy approves this contract.")
+            return True
+        answer = input("Approve this gameplay contract and begin implementation? [y/N]: ")
+        return answer.strip().lower() in {"y", "yes"}
+
+    return approve
 
 
 def _dependency_approver(policy: str):
@@ -128,8 +187,9 @@ async def _execute(args: argparse.Namespace) -> int:
         print(f"Running game; output log: {workspace.root / '.agentic' / 'playtest.log'}")
         return run_game(workspace.root, game_environment.python)
 
-    _require_api_key()
     approver = _dependency_approver(args.dependency_policy)
+    qa_approver = _qa_approver(args.qa_policy)
+    activity = TerminalActivity()
 
     if args.command == "resume":
         workspace.prepare_resume()
@@ -137,7 +197,16 @@ async def _execute(args: argparse.Namespace) -> int:
         if args.add_repair_attempts:
             saved_journal.add_repair_attempts(args.add_repair_attempts)
         saved = saved_journal.state
-        provider = ClaudeProvider(str(saved["model"]))
+        provider_name = str(saved.get("provider", "anthropic"))
+        model = str(saved["model"])
+        provider_host = str(saved.get("provider_host", "") or args.ollama_host)
+        _require_credentials(provider_name)
+        provider = _make_provider(
+            provider_name,
+            model,
+            ollama_host=provider_host,
+            activity=activity,
+        )
         builder = GameBuilder(
             provider,
             workspace,
@@ -146,11 +215,20 @@ async def _execute(args: argparse.Namespace) -> int:
             smoke_timeout=float(saved["smoke_timeout"]),
             environment=game_environment,
             dependency_approver=approver,
+            qa_approver=qa_approver,
             progress=progress,
         )
         result = await builder.resume()
     else:
-        provider = ClaudeProvider(args.model)
+        provider_name = str(args.provider)
+        model = _resolve_model(provider_name, args.model)
+        _require_credentials(provider_name)
+        provider = _make_provider(
+            provider_name,
+            model,
+            ollama_host=args.ollama_host,
+            activity=activity,
+        )
         builder = GameBuilder(
             provider,
             workspace,
@@ -165,6 +243,7 @@ async def _execute(args: argparse.Namespace) -> int:
             ),
             environment=game_environment,
             dependency_approver=approver,
+            qa_approver=qa_approver,
             progress=progress,
         )
         if args.command == "create":
