@@ -335,8 +335,20 @@ class GameBuilder:
             if not result.ok:
                 return result
 
+        journal.set_stage("refinements")
+        refinements_restored = self._restore_refinement_checkpoints(plan)
+        if refinements_restored:
+            self.progress("[7/7] Validating restored user refinements...")
+            result = self._handle_missing_dependency(
+                plan, self._run_validation(), plan_task_name="refinement"
+            )
+            if not result.ok:
+                journal.fail_task("refinement_validation", result.report)
+                return result
+        else:
+            self.progress("[7/7] Final validated project is checkpointed.")
+
         journal.set_stage("final_validation")
-        self.progress("[7/7] Final validated project is checkpointed.")
         self.workspace.write_plan(plan)
         journal.mark_complete()
         return result
@@ -370,13 +382,89 @@ class GameBuilder:
         plan = self.workspace.read_plan()
         if not self.environment.is_ready(plan.dependencies):
             raise WorkspaceError("The game environment is not ready; resume the build first")
-        result = await self._review(
-            context=f"User playtest feedback:\n{feedback}",
-            allowed_names=set(files),
-        )
-        self._apply_replacements(result, set(files))
-        return self._run_validation()
 
+        self.journal = RunJournal.load(self.workspace.root)
+        self.journal.mark_running()
+        existing = [
+            int(name.split(":", 1)[1])
+            for name in self.journal.state.get("tasks", {})
+            if name.startswith("refine:") and name.split(":", 1)[1].isdigit()
+        ]
+        refinement_number = max(existing, default=0) + 1
+        task_name = f"refine:{refinement_number:03d}"
+        self.journal.start_task(task_name)
+        try:
+            patch = self._normalize_patch(
+                await self._review(
+                    context=f"User playtest feedback:\n{feedback}",
+                    allowed_names=set(files),
+                    allow_new=True,
+                )
+            )
+            artifact = self.journal.write_json_artifact(
+                f"refinements/{refinement_number:03d}.json",
+                patch,
+            )
+            self.journal.set_task_artifact(task_name, artifact)
+            self._apply_refinement_patch(patch, plan)
+            result = self._handle_missing_dependency(
+                plan, self._run_validation(), plan_task_name="refinement"
+            )
+            if result.ok:
+                self.journal.complete_task(task_name, artifact)
+                self.journal.mark_complete()
+            else:
+                self.journal.fail_task(task_name, result.report)
+            return result
+        except BaseException as exc:
+            self.journal.fail_task(task_name, exc)
+            raise
+
+    def _apply_refinement_patch(self, patch: dict[str, Any], plan: GamePlan) -> None:
+        patch = self._normalize_patch(patch)
+        specs = {spec.name: spec for spec in plan.files}
+        summary = str(patch.get("summary", "")).strip()
+        for replacement in patch["files"]:
+            filename = str(replacement["filename"])
+            content = str(replacement["content"])
+            self.workspace.write_python(filename, content)
+            if filename not in specs:
+                spec = FileSpec(
+                    name=filename,
+                    purpose=(
+                        f"Added during refinement: {summary[:200]}"
+                        if summary
+                        else "Added during user-directed refinement"
+                    ),
+                    public_api=[],
+                )
+                plan.files.append(spec)
+                specs[filename] = spec
+
+        self._validate_plan(plan)
+        self.workspace.write_plan(plan)
+        if summary:
+            self.progress(f"  Reviewer: {summary}")
+
+    def _restore_refinement_checkpoints(self, plan: GamePlan) -> bool:
+        journal = self._journal()
+        restored = False
+        task_names = sorted(
+            name
+            for name, task in journal.state.get("tasks", {}).items()
+            if name.startswith("refine:") and task.get("artifact")
+        )
+        for task_name in task_names:
+            artifact = journal.task_artifact(task_name)
+            if not artifact:
+                continue
+            patch = self._normalize_patch(
+                dict(journal.read_json_artifact(artifact))
+            )
+            self._apply_refinement_patch(patch, plan)
+            restored = True
+            self.progress(f"  Reusing checkpoint artifact: {task_name}")
+        return restored
     async def _run_implementation_iteration(
         self,
         round_number: int,
@@ -929,11 +1017,23 @@ class GameBuilder:
             journal.fail_task(task_name, exc)
             raise
 
-    async def _review(self, *, context: str, allowed_names: set[str]) -> dict[str, Any]:
+    async def _review(
+        self,
+        *,
+        context: str,
+        allowed_names: set[str],
+        allow_new: bool = False,
+    ) -> dict[str, Any]:
+        filename_policy = (
+            "Existing filenames may be modified. New safe nested .py modules are allowed when "
+            "they represent a distinct responsibility and improve separation of concerns."
+            if allow_new
+            else f"Allowed filenames: {sorted(allowed_names)}"
+        )
         return await self.provider.structured(
             role=REVIEWER_ROLE,
             prompt=(
-                f"{context}\n\nAllowed filenames: {sorted(allowed_names)}\n\n"
+                f"{context}\n\n{filename_policy}\n\n"
                 f"Complete project:\n{self._project_snapshot()}\n\n"
                 f"Diagnostic log tails:\n{self._diagnostic_logs()}"
             ),

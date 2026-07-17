@@ -3,7 +3,7 @@
   "status": "complete",
   "stage": "complete",
   "created_at": "2026-07-17T03:53:48.884417+00:00",
-  "updated_at": "2026-07-17T07:01:34.347718+00:00",
+  "updated_at": "2026-07-17T07:31:03.298014+00:00",
   "brief": "A Qix clone",
   "model": "claude-sonnet-5",
   "renderer": "moderngl",
@@ -238,6 +238,19 @@
       "error": null,
       "completed_at": "2026-07-17T07:01:26.196270+00:00",
       "artifact": "artifacts/repairs/3.json"
+    },
+    "refine:001": {
+      "status": "failed",
+      "started_at": "2026-07-17T07:14:42.661618+00:00",
+      "error": "Anthropic API request failed (200): {'type': 'error', 'error': {'details': None, 'type': 'overloaded_error', 'message': 'Overloaded'}, 'request_id': 'req_011Cd7DZDwNAmZZiZBQ9e1id'}",
+      "failed_at": "2026-07-17T07:14:54.729294+00:00"
+    },
+    "refine:002": {
+      "status": "complete",
+      "started_at": "2026-07-17T07:29:58.957158+00:00",
+      "error": null,
+      "artifact": "artifacts/refinements/002.json",
+      "completed_at": "2026-07-17T07:31:03.296831+00:00"
     }
   },
   "last_error": null

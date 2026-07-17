@@ -71,9 +71,37 @@ class GameOverState:
         renderer.begin_frame()
         width, height = ctx.window_size
         center = (width / 2.0, height / 2.0)
-        # Minimal, dependency-free way to signal state until text rendering
-        # is added: draw a marker sized/colored by outcome.
-        renderer.draw_marker(center, 20.0, (1.0, 0.2, 0.2, 1.0))
+
+        renderer.draw_text(
+            "GAME OVER",
+            (center[0], center[1] - 100.0),
+            size=44,
+            color=(1.0, 0.3, 0.3, 1.0),
+            align="center",
+        )
+        renderer.draw_text(
+            f"Final Score: {self._final_score}",
+            (center[0], center[1] - 30.0),
+            size=26,
+            color=(1.0, 1.0, 1.0, 1.0),
+            align="center",
+        )
+        renderer.draw_text(
+            f"Area Claimed: {self._final_percent:.1f}%",
+            (center[0], center[1] + 10.0),
+            size=26,
+            color=(1.0, 1.0, 1.0, 1.0),
+            align="center",
+        )
+        renderer.draw_text(
+            "Press ENTER to return to menu",
+            (center[0], center[1] + 70.0),
+            size=24,
+            color=(1.0, 0.9, 0.3, 1.0),
+            align="center",
+        )
+
+        renderer.draw_marker(center, 4.0, (1.0, 0.2, 0.2, 1.0))
         renderer.end_frame()
 
     def next(self, ctx: GameContext) -> Optional[StateID]:

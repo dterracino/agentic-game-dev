@@ -1,8 +1,8 @@
 """High-level draw API consuming only primitive tuples/colors.
 
-This module wraps LineBatch/PolygonMesh and marker circles, and manages
-frame begin/end. It never imports gamelib or states modules; it only
-consumes primitive tuples/floats/colors.
+This module wraps LineBatch/PolygonMesh, marker circles, and text
+rendering, and manages frame begin/end. It never imports gamelib or
+states modules; it only consumes primitive tuples/floats/colors/strings.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import moderngl
 from render.line_batch import LineBatch
 from render.polygon_mesh import PolygonMesh
 from render.shaders import load_program
+from render.text_renderer import TextRenderer
 
 Color = Tuple[float, float, float, float]
 Point = Tuple[float, float]
@@ -28,7 +29,8 @@ _MARKER_SEGMENTS = 24
 class Renderer:
     """High level renderer wrapping GPU primitives.
 
-    Consumes only primitive tuples/floats/colors -- never gamelib objects.
+    Consumes only primitive tuples/floats/colors/strings -- never gamelib
+    objects.
     """
 
     def __init__(self, ctx: moderngl.Context, window_size: Tuple[int, int]) -> None:
@@ -42,6 +44,8 @@ class Renderer:
         self._trail_batch = LineBatch(ctx, self._line_program)
         self._claim_mesh = PolygonMesh(ctx, self._poly_program)
         self._marker_mesh = PolygonMesh(ctx, self._poly_program)
+
+        self._text_renderer = TextRenderer(ctx, window_size)
 
         self._clear_color = (0.03, 0.03, 0.05, 1.0)
 
@@ -95,6 +99,22 @@ class Renderer:
         self._set_resolution(self._poly_program)
         self._set_color(self._poly_program, color)
         self._marker_mesh.draw()
+
+    def draw_text(
+        self,
+        text: str,
+        pos: Point,
+        size: int = 24,
+        color: Color = (1.0, 1.0, 1.0, 1.0),
+        align: str = "center",
+    ) -> None:
+        """Draw a string of readable text anchored at pos (top-left or
+        top-center per `align`). Backed by CPU font rasterization uploaded
+        as a GPU texture (see render/text_renderer.py)."""
+        self._text_renderer.draw_text(text, pos, size=size, color=color, align=align)
+
+    def measure_text(self, text: str, size: int = 24) -> Tuple[int, int]:
+        return self._text_renderer.measure(text, size=size)
 
     def end_frame(self) -> None:
         self._ctx.disable(moderngl.BLEND)

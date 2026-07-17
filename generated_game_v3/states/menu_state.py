@@ -58,14 +58,25 @@ class MenuState:
         center_x = width / 2.0
         center_y = height / 2.0
 
-        title_pos = (center_x, center_y - 120.0)
-        renderer.draw_marker(title_pos, 6.0, (1.0, 1.0, 1.0, 1.0))
+        title_pos = (center_x, center_y - 150.0)
+        renderer.draw_text(
+            self._title,
+            title_pos,
+            size=42,
+            color=(1.0, 1.0, 1.0, 1.0),
+            align="center",
+        )
 
-        line_spacing = 28.0
-        start_y = center_y - 40.0
-        for i, _line in enumerate(self._instructions):
+        line_spacing = 32.0
+        start_y = center_y - 60.0
+        for i, line in enumerate(self._instructions):
             pos = (center_x, start_y + i * line_spacing)
-            renderer.draw_marker(pos, 3.0, (0.7, 0.9, 1.0, 1.0))
+            if not line:
+                continue
+            is_prompt = line.strip().upper().startswith("PRESS ENTER")
+            color = (1.0, 0.9, 0.3, 1.0) if is_prompt else (0.75, 0.9, 1.0, 1.0)
+            size = 26 if is_prompt else 22
+            renderer.draw_text(line, pos, size=size, color=color, align="center")
 
         renderer.end_frame()
 

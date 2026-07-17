@@ -225,6 +225,11 @@
         "load_highscores() -> list[dict]",
         "save_highscore(entry: dict) -> None"
       ]
+    },
+    {
+      "name": "render/text_renderer.py",
+      "purpose": "Added during refinement: Root cause of the \"anonymous dots\" menu: MenuState/GameOverState only ever called renderer.draw_marker() for title/instruction text (dots), since the Renderer had no actual text-drawing capability at ",
+      "public_api": []
     }
   ],
   "dependencies": [

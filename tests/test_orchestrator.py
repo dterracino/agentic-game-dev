@@ -111,6 +111,16 @@ class FakeProvider:
                 ],
                 "review_summary": "Improve the game state.",
             }
+        if tool_name == "submit_replacements":
+            return {
+                "files": [
+                    {
+                        "filename": "render/text.py",
+                        "content": "def draw_text(value: str) -> str:\n    return value\n",
+                    }
+                ],
+                "summary": "Add a separated text-rendering responsibility.",
+            }
         if tool_name == "submit_python_file":
             name = "main.py" if "Your assigned file: main.py" in prompt else "game.py"
             self.calls[f"file:{name}"] += 1
@@ -255,6 +265,29 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(second.calls["file:main.py"], 0)
             self.assertEqual(second.calls["file:game.py"], 1)
             self.assertIn("improved = True", (workspace.root / "game.py").read_text())
+
+    async def test_refine_adds_new_file_to_plan_and_resume_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            environment = FakeEnvironment()
+            provider = FakeProvider()
+            builder = make_builder(provider, workspace, environment, [])
+            created = await builder.create("A small game")
+            self.assertTrue(created.ok, created.report)
+
+            refined = await builder.refine("Add readable menu text")
+
+            self.assertTrue(refined.ok, refined.report)
+            self.assertTrue((workspace.root / "render" / "text.py").is_file())
+            plan = workspace.read_plan()
+            self.assertIn("render/text.py", {spec.name for spec in plan.files})
+            state = RunJournal.load(workspace.root).state
+            self.assertEqual(state["tasks"]["refine:001"]["status"], "complete")
+
+            (workspace.root / "render" / "text.py").unlink()
+            resumed = await make_builder(FakeProvider(), workspace, environment, []).resume()
+            self.assertTrue(resumed.ok, resumed.report)
+            self.assertTrue((workspace.root / "render" / "text.py").is_file())
 
     def test_normalizes_json_encoded_repair_files(self) -> None:
         patch = GameBuilder._normalize_patch(

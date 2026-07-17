@@ -8,6 +8,7 @@ The generator supports checkpointed design passes before architecture and checkp
 
 - Designer and architect proposals are checkpointed independently.
 - Adaptive-thinking models use medium effort with enough output headroom for a final answer.
+- Transient Anthropic overload, rate-limit, timeout, and server failures use bounded exponential-backoff retries.
 - The final plan declares exact file APIs and every third-party dependency.
 - A requirements.txt file is written before dependency approval.
 - Each game receives its own .venv.
