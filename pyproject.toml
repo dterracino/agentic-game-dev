@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-game-dev"
+version = "2.0.0"
+description = "A safe, coordinated agent team for generating polished Pygame games"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40,<1",
+    "pygame-ce>=2.5,<3",
+    "moderngl>=5.12,<6",
+    "python-dotenv>=1.0,<2",
+]
+
+[project.scripts]
+agent-game-dev = "agentic_game_dev.cli:main"
+
+[project.optional-dependencies]
+dev = ["ruff>=0.11", "mypy>=1.15"]
+
+[tool.setuptools.packages.find]
+include = ["agentic_game_dev*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

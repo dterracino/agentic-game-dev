@@ -1,3 +1,17 @@
+Metadata-Version: 2.4
+Name: agentic-game-dev
+Version: 2.0.0
+Summary: A safe, coordinated agent team for generating polished Pygame games
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: anthropic<1,>=0.40
+Requires-Dist: pygame-ce<3,>=2.5
+Requires-Dist: moderngl<6,>=5.12
+Requires-Dist: python-dotenv<2,>=1.0
+Provides-Extra: dev
+Requires-Dist: ruff>=0.11; extra == "dev"
+Requires-Dist: mypy>=1.15; extra == "dev"
+
 # Agentic Game Dev
 
 Agentic Game Dev coordinates a small team of AI agents to design, implement, review, and refine a complete Pygame game. Version 2 replaces the original 2024 single-script prototype with a package that is safer to run, easier to test, and much better at keeping multiple generated files coherent.
@@ -35,7 +49,7 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 ANTHROPIC_MODEL=claude-sonnet-5
 ~~~
 
-The .env file is ignored by Git. Do not commit real API keys. The model entry is optional; omit it to use the built-in default. Model precedence is: an explicit --model option, then .env, then the process environment, then the built-in default.
+The .env file is ignored by Git. Do not commit real API keys. The model entry is optional; omit it to use the built-in default.
 
 ## Create a game
 

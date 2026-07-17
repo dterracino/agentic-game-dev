@@ -1,0 +1,8 @@
+anthropic<1,>=0.40
+pygame-ce<3,>=2.5
+moderngl<6,>=5.12
+python-dotenv<2,>=1.0
+
+[dev]
+ruff>=0.11
+mypy>=1.15
