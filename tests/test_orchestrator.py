@@ -47,7 +47,7 @@ class FakeProvider:
         self.iteration_failed = False
         self.syntax_failed = False
         self.calls: Counter[str] = Counter()
-        self.game_saw_main_checkpoint = False
+        self.main_saw_game_checkpoint = False
         self.files = {
             "main.py": (
                 "import time\n"
@@ -93,8 +93,8 @@ class FakeProvider:
                 "quality_bar": ["clear", "fair", "responsive", "complete"],
                 "dependencies": [],
                 "files": [
-                    {"name": "main.py", "purpose": "Entry", "public_api": ["main() -> None"]},
                     {"name": "game.py", "purpose": "Game state", "public_api": ["Game"]},
+                    {"name": "main.py", "purpose": "Entry", "public_api": ["main() -> None"]},
                 ],
             }
         if tool_name == "submit_qa_contract":
@@ -123,8 +123,8 @@ class FakeProvider:
                     "quality_bar": ["clear", "fair", "responsive", "complete"],
                     "dependencies": [],
                     "files": [
-                        {"name": "main.py", "purpose": "Entry", "public_api": ["main() -> None"]},
                         {"name": "game.py", "purpose": "Game state", "public_api": ["Game"]},
+                        {"name": "main.py", "purpose": "Entry", "public_api": ["main() -> None"]},
                     ],
                 },
                 "files_to_change": [
@@ -145,8 +145,8 @@ class FakeProvider:
         if tool_name == "submit_python_file":
             name = "main.py" if "Your assigned file: main.py" in prompt else "game.py"
             self.calls[f"file:{name}"] += 1
-            if name == "game.py" and "Project implemented so far:" in prompt:
-                self.game_saw_main_checkpoint = "def main():" in prompt
+            if name == "main.py" and "Project implemented so far:" in prompt:
+                self.main_saw_game_checkpoint = "class Game:" in prompt
             is_iteration = "Reason for change:" in prompt
             if is_iteration and self.fail_iteration_once and not self.iteration_failed:
                 self.iteration_failed = True
@@ -200,7 +200,10 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 core_loop=["read", "enter a command", "observe the changed world"],
                 controls=["Type commands and press Enter"],
                 quality_bar=["clear", "responsive", "coherent", "complete"],
-                files=[FileSpec("main.py", "Pygame entry point")],
+                files=[
+                    FileSpec("main.py", "Pygame entry point"),
+                    FileSpec("game.py", "Toolkit-independent game rules"),
+                ],
                 dependencies=[
                     DependencySpec(
                         "pygame-gui",
@@ -215,9 +218,59 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(
                 [dependency.requirement for dependency in normalized.dependencies],
-                ["pygame-gui>=0.6,<1", "pygame-ce>=2.5,<3"],
+                ["pygame-gui>=0.6,<0.7", "pygame-ce>=2.5,<3"],
             )
             self.assertIsNotNone(normalized.dependency_for_import("pygame_gui"))
+            self.assertEqual([item.name for item in normalized.files], ["game.py", "main.py"])
+
+    async def test_completed_plan_is_normalized_when_resumed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(False)
+            builder = GameBuilder(
+                FakeProvider(),
+                workspace,
+                environment=FakeEnvironment(),
+            )
+            builder.journal = RunJournal.create(
+                workspace.root,
+                brief="test",
+                model="test-model",
+                renderer="pygame",
+                repair_attempts=0,
+                smoke_timeout=8,
+            )
+            stale = GamePlan(
+                title="Parser Adventure",
+                pitch="Test",
+                core_loop=["read", "command", "respond"],
+                controls=[],
+                quality_bar=["a", "b", "c", "d"],
+                files=[
+                    FileSpec("main.py", "entry"),
+                    FileSpec("game.py", "rules"),
+                ],
+                dependencies=[
+                    DependencySpec(
+                        "pygame-gui",
+                        "pygame_gui",
+                        ">=0.7.2,<1",
+                        "Graphical text interface",
+                    )
+                ],
+            )
+            artifact = builder.journal.write_json_artifact(
+                "planning/plan.json", stale.as_dict()
+            )
+            builder.journal.complete_task("plan", artifact)
+
+            resumed = await builder._plan_checkpoint("", "", "")
+
+            self.assertEqual(
+                [item.requirement for item in resumed.dependencies],
+                ["pygame-gui>=0.6,<0.7", "pygame-ce>=2.5,<3"],
+            )
+            self.assertEqual([item.name for item in resumed.files], ["game.py", "main.py"])
 
     async def test_builds_checkpointed_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -238,7 +291,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((workspace.root / "QA_ACCEPTANCE.md").is_file())
             self.assertEqual(state["tasks"]["file:main.py"]["status"], "complete")
             self.assertEqual(state["tasks"]["file:game.py"]["status"], "complete")
-            self.assertTrue(provider.game_saw_main_checkpoint)
+            self.assertTrue(provider.main_saw_game_checkpoint)
             self.assertEqual(environment.ensure_calls, [["pygame-ce>=2.5,<3"]])
             self.assertEqual(
                 (workspace.root / "requirements.txt").read_text(encoding="utf-8"),
@@ -365,14 +418,14 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")
             environment = FakeEnvironment()
-            first = FakeProvider(fail_file_once="game.py")
+            first = FakeProvider(fail_file_once="main.py")
 
             with self.assertRaisesRegex(RuntimeError, "simulated failure"):
                 await make_builder(first, workspace, environment, []).create("A small game")
 
             interrupted = RunJournal.load(workspace.root).state
-            self.assertEqual(interrupted["tasks"]["file:main.py"]["status"], "complete")
-            self.assertEqual(interrupted["tasks"]["file:game.py"]["status"], "failed")
+            self.assertEqual(interrupted["tasks"]["file:game.py"]["status"], "complete")
+            self.assertEqual(interrupted["tasks"]["file:main.py"]["status"], "failed")
 
             second = FakeProvider()
             result = await make_builder(second, workspace, environment, []).resume()
@@ -381,8 +434,8 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(second.calls["designer"], 0)
             self.assertEqual(second.calls["architecture"], 0)
             self.assertEqual(second.calls["submit_game_plan"], 0)
-            self.assertEqual(second.calls["file:main.py"], 0)
-            self.assertEqual(second.calls["file:game.py"], 1)
+            self.assertEqual(second.calls["file:game.py"], 0)
+            self.assertEqual(second.calls["file:main.py"], 1)
 
     async def test_runs_checkpointed_design_and_implementation_iterations(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -536,11 +589,11 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
 
     def test_plan_file_count_is_not_artificially_limited(self) -> None:
-        files = [FileSpec("main.py", "entry")]
-        files.extend(
+        files = [
             FileSpec(f"systems/system_{index}.py", f"system {index}")
             for index in range(24)
-        )
+        ]
+        files.append(FileSpec("main.py", "entry"))
         plan = GamePlan(
             title="Many responsibilities",
             pitch="Separated systems",

@@ -184,6 +184,10 @@ PATCH_SCHEMA: dict[str, Any] = {
 
 FILE_GENERATION_ATTEMPTS = 3
 
+KNOWN_DEPENDENCY_CONSTRAINTS: dict[str, tuple[str, str]] = {
+    "pygame_gui": ("pygame-gui", ">=0.6,<0.7"),
+}
+
 
 DESIGNER_ROLE = """You are the lead game designer on a tiny expert team. Infer the game's genre,
 interaction model, pacing, and intended session structure from the brief instead of forcing it into
@@ -532,7 +536,15 @@ class GameBuilder:
                     ),
                     public_api=[],
                 )
-                plan.files.append(spec)
+                main_index = next(
+                    (
+                        index
+                        for index, planned in enumerate(plan.files)
+                        if planned.name == "main.py"
+                    ),
+                    len(plan.files),
+                )
+                plan.files.insert(main_index, spec)
                 specs[filename] = spec
 
         self._validate_plan(plan)
@@ -910,7 +922,9 @@ class GameBuilder:
             if not artifact:
                 raise WorkspaceError("Plan checkpoint has no artifact")
             self.progress("  Reusing checkpoint: plan")
-            return GamePlan.from_dict(journal.read_json_artifact(artifact))
+            plan = self._normalize_plan(GamePlan.from_dict(journal.read_json_artifact(artifact)))
+            self._validate_plan(plan)
+            return plan
         journal.start_task(task_name)
         try:
             raw_plan = await self.provider.structured(
@@ -1421,17 +1435,30 @@ class GameBuilder:
                 )
             )
         baseline_imports = {item.import_name for item in baseline}
-        dependencies = [
-            item for item in plan.dependencies if item.import_name not in baseline_imports
-        ]
+        dependencies: list[DependencySpec] = []
+        for item in plan.dependencies:
+            if item.import_name in baseline_imports:
+                continue
+            known = KNOWN_DEPENDENCY_CONSTRAINTS.get(item.import_name)
+            if known:
+                distribution, version = known
+                item = DependencySpec(
+                    distribution=distribution,
+                    import_name=item.import_name,
+                    version=version,
+                    reason=item.reason,
+                )
+            dependencies.append(item)
         dependencies.extend(baseline)
+        files = [item for item in plan.files if item.name != "main.py"]
+        files.extend(item for item in plan.files if item.name == "main.py")
         return GamePlan(
             title=plan.title,
             pitch=plan.pitch,
             core_loop=plan.core_loop,
             controls=plan.controls,
             quality_bar=plan.quality_bar,
-            files=plan.files,
+            files=files,
             dependencies=dependencies,
         )
 
@@ -1440,6 +1467,8 @@ class GameBuilder:
         names = [spec.name for spec in plan.files]
         if names.count("main.py") != 1:
             raise ValueError("Plan must contain main.py exactly once")
+        if names[-1] != "main.py":
+            raise ValueError("Plan must place main.py last")
         if len(names) != len(set(names)):
             raise ValueError("Plan contains duplicate filenames")
         imports: set[str] = set()
