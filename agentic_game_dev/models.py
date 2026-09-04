@@ -72,6 +72,31 @@ class FileSpec:
 
 
 @dataclass(frozen=True)
+class RenderEffectSpec:
+    experience: str
+    technique: str
+    owner: str
+    validation: str
+
+    @classmethod
+    def from_dict(cls, value: dict[str, object]) -> "RenderEffectSpec":
+        return cls(
+            experience=str(value["experience"]).strip(),
+            technique=str(value["technique"]).strip(),
+            owner=str(value["owner"]).strip(),
+            validation=str(value["validation"]).strip(),
+        )
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "experience": self.experience,
+            "technique": self.technique,
+            "owner": self.owner,
+            "validation": self.validation,
+        }
+
+
+@dataclass(frozen=True)
 class GamePlan:
     title: str
     pitch: str
@@ -80,6 +105,8 @@ class GamePlan:
     quality_bar: list[str]
     files: list[FileSpec]
     dependencies: list[DependencySpec] = field(default_factory=list)
+    rendering_strategy: str = ""
+    render_effects: list[RenderEffectSpec] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> "GamePlan":
@@ -87,6 +114,10 @@ class GamePlan:
         dependencies = [
             DependencySpec.from_dict(item)
             for item in value.get("dependencies", [])  # type: ignore[union-attr]
+        ]
+        render_effects = [
+            RenderEffectSpec.from_dict(item)
+            for item in value.get("render_effects", [])  # type: ignore[union-attr]
         ]
         return cls(
             title=str(value["title"]),
@@ -96,6 +127,8 @@ class GamePlan:
             quality_bar=[str(item) for item in value["quality_bar"]],  # type: ignore[union-attr]
             files=files,
             dependencies=dependencies,
+            rendering_strategy=str(value.get("rendering_strategy", "")).strip(),
+            render_effects=render_effects,
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -107,6 +140,8 @@ class GamePlan:
             "quality_bar": self.quality_bar,
             "files": [item.as_dict() for item in self.files],
             "dependencies": [item.as_dict() for item in self.dependencies],
+            "rendering_strategy": self.rendering_strategy,
+            "render_effects": [item.as_dict() for item in self.render_effects],
         }
 
     def as_context(self) -> str:
@@ -118,11 +153,18 @@ class GamePlan:
             f"- {item.requirement} (import {item.import_name}): {item.reason}"
             for item in self.dependencies
         ) or "- Standard library only"
+        effect_lines = "\n".join(
+            f"- {item.experience}: {item.technique}; owner: {item.owner}; "
+            f"validation: {item.validation}"
+            for item in self.render_effects
+        ) or "- No special visual effects requested"
         return (
             f"Title: {self.title}\nPitch: {self.pitch}\n"
             f"Core loop: {'; '.join(self.core_loop)}\n"
             f"Controls: {'; '.join(self.controls)}\n"
             f"Quality bar: {'; '.join(self.quality_bar)}\n"
+            f"Rendering strategy: {self.rendering_strategy or 'Not specified'}\n"
+            f"Render effects:\n{effect_lines}\n"
             f"Dependencies:\n{dependency_lines}\nFiles:\n{file_lines}"
         )
 

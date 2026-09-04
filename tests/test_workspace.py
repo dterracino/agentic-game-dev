@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agentic_game_dev.models import FileSpec, GamePlan
+from agentic_game_dev.models import FileSpec, GamePlan, RenderEffectSpec
 from agentic_game_dev.workspace import GameWorkspace, WorkspaceError
 
 
@@ -52,6 +52,15 @@ class WorkspaceTests(unittest.TestCase):
             controls=["Arrows"],
             quality_bar=["clear", "fair", "juicy", "complete"],
             files=[FileSpec("main.py", "Entry point", ["main() -> None"])],
+            rendering_strategy="Use a composited 2D presentation.",
+            render_effects=[
+                RenderEffectSpec(
+                    experience="Soft glow around clues",
+                    technique="Layered translucent surfaces",
+                    owner="rendering/effects.py",
+                    validation="Screenshot shows a halo without obscuring text",
+                )
+            ],
         )
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")
@@ -60,6 +69,9 @@ class WorkspaceTests(unittest.TestCase):
             workspace.write_python("main.py", "def main():\n    return None\n")
             self.assertTrue((workspace.root / "game_plan.json").is_file())
             self.assertIn("def main", workspace.read_python_files()["main.py"])
+            restored = workspace.read_plan()
+            self.assertEqual(restored.rendering_strategy, plan.rendering_strategy)
+            self.assertEqual(restored.render_effects, plan.render_effects)
 
     def test_does_not_replace_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

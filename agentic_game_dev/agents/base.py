@@ -11,11 +11,13 @@ class AgentRole(ABC):
     instructions: ClassVar[str]
 
     @classmethod
-    def system_prompt(cls) -> str:
+    def system_prompt(cls, *policy_sections: str) -> str:
         prompt = cls.instructions.strip()
         if not prompt:
             raise ValueError(f"{cls.__name__} has no instructions")
-        return prompt
+        sections = [prompt]
+        sections.extend(section.strip() for section in policy_sections if section.strip())
+        return "\n\n".join(sections)
 
     @staticmethod
     def specification_section(specification: str) -> str:

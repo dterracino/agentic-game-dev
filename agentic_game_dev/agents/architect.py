@@ -18,7 +18,9 @@ improves the game. Require main.py to configure standard logging to game.log, lo
 startup/runtime exceptions, and re-raise them. It must never call sys.exit() from a finally block or
 otherwise turn failures into successful exits. Never propose shell commands, network access,
 dynamic code execution, or file access outside the game directory. Keep the architecture concise
-and do not include speculative file implementations."""
+and do not include speculative file implementations. In the build contract, state the overall
+rendering strategy and map every requested visual effect to its player-facing intent, concrete
+technique, owning module, and observable validation evidence."""
 
 
 class IterationArchitectRole(AgentRole):

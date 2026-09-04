@@ -47,6 +47,58 @@ def validate_project(root: Path) -> ValidationResult:
     return ValidationResult(True, f"Static compilation passed for {len(files)} Python files")
 
 
+def validate_renderer_project(root: Path, renderer: str) -> ValidationResult:
+    """Verify renderer-specific implementation commitments without launching the game."""
+
+    if renderer != "moderngl":
+        return ValidationResult(True, f"Renderer contract passed for {renderer}")
+
+    imported = False
+    creates_context = False
+    creates_program = False
+    for path in sorted(root.rglob("*.py")):
+        if ".venv" in path.relative_to(root).parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = imported or any(alias.name == "moderngl" for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                imported = imported or node.module == "moderngl"
+            elif isinstance(node, ast.Call):
+                function = node.func
+                function_name = function.attr if isinstance(function, ast.Attribute) else ""
+                creates_context = creates_context or function_name in {
+                    "create_context",
+                    "create_standalone_context",
+                }
+                keyword_names = {keyword.arg for keyword in node.keywords}
+                creates_program = creates_program or {
+                    "vertex_shader",
+                    "fragment_shader",
+                }.issubset(keyword_names)
+
+    missing: list[str] = []
+    if not imported:
+        missing.append("import moderngl")
+    if not creates_context:
+        missing.append("create a ModernGL context")
+    if not creates_program:
+        missing.append("compile a vertex/fragment shader program")
+    if missing:
+        return ValidationResult(
+            False,
+            "ModernGL renderer contract failed: " + "; ".join(missing),
+        )
+    return ValidationResult(
+        True,
+        "ModernGL renderer contract passed: import, context, and shader program found",
+    )
+
+
 def smoke_test(root: Path, python: Path, timeout: float) -> ValidationResult:
     """Launch the real entry point and require it to remain alive for the interval."""
     if not python.is_file():

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .agents import (
+    AgentRole,
     ArchitectRole,
     DesignerRole,
     GameplayReviewerRole,
@@ -19,7 +20,13 @@ from .agents import (
 from .environment import GameEnvironment
 from .journal import RunJournal
 from .models import DependencySpec, FileSpec, GamePlan
-from .validation import ValidationResult, smoke_test, validate_project
+from .policies import DEFAULT_ENGINEERING_POLICY, get_renderer_profile
+from .validation import (
+    ValidationResult,
+    smoke_test,
+    validate_project,
+    validate_renderer_project,
+)
 from .workspace import GameWorkspace, WorkspaceError
 
 
@@ -72,6 +79,21 @@ PLAN_SCHEMA: dict[str, Any] = {
         "core_loop": {"type": "array", "items": {"type": "string"}, "minItems": 3},
         "controls": {"type": "array", "items": {"type": "string"}},
         "quality_bar": {"type": "array", "items": {"type": "string"}, "minItems": 4},
+        "rendering_strategy": {"type": "string", "minLength": 1},
+        "render_effects": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "experience": {"type": "string", "minLength": 1},
+                    "technique": {"type": "string", "minLength": 1},
+                    "owner": {"type": "string", "minLength": 1},
+                    "validation": {"type": "string", "minLength": 1},
+                },
+                "required": ["experience", "technique", "owner", "validation"],
+                "additionalProperties": False,
+            },
+        },
         "dependencies": {"type": "array", "items": DEPENDENCY_SCHEMA},
         "files": {
             "type": "array",
@@ -97,6 +119,8 @@ PLAN_SCHEMA: dict[str, Any] = {
         "core_loop",
         "controls",
         "quality_bar",
+        "rendering_strategy",
+        "render_effects",
         "dependencies",
         "files",
     ],
@@ -200,13 +224,6 @@ KNOWN_DEPENDENCY_CONSTRAINTS: dict[str, tuple[str, str]] = {
 
 
 DESIGNER_ROLE = DesignerRole.system_prompt()
-ARCHITECT_ROLE = ArchitectRole.system_prompt()
-QA_AUTHOR_ROLE = QaAuthorRole.system_prompt()
-IMPLEMENTER_ROLE = ImplementerRole.system_prompt()
-GAMEPLAY_REVIEWER_ROLE = GameplayReviewerRole.system_prompt()
-TECHNICAL_REVIEWER_ROLE = TechnicalReviewerRole.system_prompt()
-ITERATION_ARCHITECT_ROLE = IterationArchitectRole.system_prompt()
-REVIEWER_ROLE = RepairReviewerRole.system_prompt()
 
 
 class GameBuilder:
@@ -318,7 +335,7 @@ class GameBuilder:
         architecture = await self._text_checkpoint(
             "architecture",
             "planning/architecture.txt",
-            role=ARCHITECT_ROLE,
+            role=self._technical_role(ArchitectRole),
             prompt=(
                 f"{self._specification_context()}"
                 f"Explore a robust architecture for this brief:\n{brief}\n\n"
@@ -549,13 +566,13 @@ class GameBuilder:
             self._text_checkpoint(
                 f"{prefix}:gameplay_review",
                 f"{directory}/gameplay_review.txt",
-                role=GAMEPLAY_REVIEWER_ROLE,
+                role=self._technical_role(GameplayReviewerRole),
                 prompt=context,
             ),
             self._text_checkpoint(
                 f"{prefix}:technical_review",
                 f"{directory}/technical_review.txt",
-                role=TECHNICAL_REVIEWER_ROLE,
+                role=self._technical_role(TechnicalReviewerRole),
                 prompt=context,
             ),
             return_exceptions=True,
@@ -630,7 +647,7 @@ class GameBuilder:
             journal.start_task(task_name)
             try:
                 raw = await self.provider.structured(
-                    role=ITERATION_ARCHITECT_ROLE,
+                    role=self._technical_role(IterationArchitectRole),
                     prompt=(
                         f"{self._specification_context()}"
                         f"Original brief:\n{brief}\n\nCurrent contract:\n"
@@ -813,7 +830,7 @@ class GameBuilder:
             journal.start_task(task_name)
             try:
                 raw = await self.provider.structured(
-                    role=QA_AUTHOR_ROLE,
+                    role=self._technical_role(QaAuthorRole),
                     prompt=(
                         f"{self._specification_context()}"
                         f"Original brief:\n{brief}\n\nFinal design:\n{design}\n\n"
@@ -884,7 +901,7 @@ class GameBuilder:
         journal.start_task(task_name)
         try:
             raw_plan = await self.provider.structured(
-                role=ARCHITECT_ROLE,
+                role=self._technical_role(ArchitectRole),
                 prompt=(
                     f"{self._specification_context()}"
                     f"Original brief:\n{brief}\n\nDesigner proposal:\n{design}\n\n"
@@ -963,7 +980,7 @@ class GameBuilder:
         try:
             for attempt in range(1, FILE_GENERATION_ATTEMPTS + 1):
                 result = await self.provider.structured(
-                    role=IMPLEMENTER_ROLE,
+                    role=self._technical_role(ImplementerRole),
                     prompt=prompt + retry_context,
                     tool_name="submit_python_file",
                     description="Submit one complete validated Python source file.",
@@ -1206,7 +1223,7 @@ class GameBuilder:
             else f"Allowed filenames: {sorted(allowed_names)}"
         )
         return await self.provider.structured(
-            role=REVIEWER_ROLE,
+            role=self._technical_role(RepairReviewerRole),
             prompt=(
                 f"{self._specification_context()}{context}\n\n{filename_policy}\n\n"
                 f"Complete project:\n{self._project_snapshot()}\n\n"
@@ -1372,9 +1389,13 @@ class GameBuilder:
         static = validate_project(self.workspace.root)
         if not static.ok:
             return static
+        renderer = validate_renderer_project(self.workspace.root, self.renderer)
+        if not renderer.ok:
+            return renderer
         return smoke_test(self.workspace.root, self.environment.python, self.smoke_timeout)
 
     def _normalize_plan(self, plan: GamePlan) -> GamePlan:
+        renderer_profile = get_renderer_profile(self.renderer)
         baseline = [
             DependencySpec(
                 distribution="pygame-ce",
@@ -1418,6 +1439,10 @@ class GameBuilder:
             quality_bar=plan.quality_bar,
             files=files,
             dependencies=dependencies,
+            rendering_strategy=(
+                plan.rendering_strategy or renderer_profile.default_strategy
+            ),
+            render_effects=plan.render_effects,
         )
 
     @staticmethod
@@ -1429,6 +1454,16 @@ class GameBuilder:
             raise ValueError("Plan must place main.py last")
         if len(names) != len(set(names)):
             raise ValueError("Plan contains duplicate filenames")
+        for number, effect in enumerate(plan.render_effects, start=1):
+            if not all(
+                (
+                    effect.experience,
+                    effect.technique,
+                    effect.owner,
+                    effect.validation,
+                )
+            ):
+                raise ValueError(f"Render effect {number} has an empty contract field")
         imports: set[str] = set()
         distributions: set[str] = set()
         for dependency in plan.dependencies:
@@ -1457,6 +1492,12 @@ class GameBuilder:
 
     def _specification_context(self) -> str:
         return DesignerRole.specification_section(self._journal().read_specification())
+
+    def _technical_role(self, role: type[AgentRole]) -> str:
+        return role.system_prompt(
+            DEFAULT_ENGINEERING_POLICY.prompt_section(),
+            get_renderer_profile(self.renderer).prompt_section(),
+        )
 
     def _journal(self) -> RunJournal:
         if self.journal is None:

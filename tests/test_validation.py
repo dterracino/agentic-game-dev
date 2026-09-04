@@ -7,7 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agentic_game_dev.validation import run_game, smoke_test, validate_project
+from agentic_game_dev.validation import (
+    run_game,
+    smoke_test,
+    validate_project,
+    validate_renderer_project,
+)
 
 
 class ValidationTests(unittest.TestCase):
@@ -35,6 +40,32 @@ class ValidationTests(unittest.TestCase):
             self.assertIn("Game exited", result.report)
             log = (root / ".agentic" / "runtime.log").read_text(encoding="utf-8")
             self.assertIn("exit 0", log)
+
+    def test_moderngl_contract_rejects_dependency_only_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "main.py").write_text("def main():\n    pass\n", encoding="utf-8")
+
+            result = validate_renderer_project(root, "moderngl")
+
+            self.assertFalse(result.ok)
+            self.assertIn("import moderngl", result.report)
+            self.assertIn("shader program", result.report)
+
+    def test_moderngl_contract_accepts_context_and_shader_program(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "main.py").write_text(
+                "import moderngl\n\n"
+                "def build():\n"
+                "    ctx = moderngl.create_context()\n"
+                "    return ctx.program(vertex_shader='vertex', fragment_shader='fragment')\n",
+                encoding="utf-8",
+            )
+
+            result = validate_renderer_project(root, "moderngl")
+
+            self.assertTrue(result.ok, result.report)
 
     def test_runtime_probe_accepts_game_that_remains_active(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

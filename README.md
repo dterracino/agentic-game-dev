@@ -198,6 +198,22 @@ Apply playtest feedback with:
 
 The CLI prints the effective provider, model, provider host when applicable, output, renderer, iteration counts, repair budget, and game interpreter before work begins.
 
+### Renderer decisions and engineering policy
+
+Game specifications should describe player-facing visuals rather than prescribe implementation
+technology. For example, request soft bloom, heat distortion, phosphor persistence, or a brief
+damage color split without mentioning GLSL. The selected renderer profile tells the architect how
+to implement those effects.
+
+With `--renderer moderngl`, the generated build contract must map each requested visual effect to
+its concrete GPU or simpler rendering technique, owning module, and observable validation method.
+The generated project must actually import ModernGL, create a context, and compile a vertex/fragment
+shader program; declaring the dependency alone fails validation.
+
+Project-wide engineering rules are maintained separately from game specifications. The built-in
+policy applies separation of concerns, DRY, explicit ownership, acyclic typed APIs, testable domain
+logic, and renderer-resource lifecycle rules to architecture, QA, implementation, and review.
+
 ## Validation boundary
 
 The built-in runtime probe proves that the program imports, starts, and remains alive for the configured interval. The QA contract defines the additional mechanical, scripted-playtest, telemetry, and visual evidence needed to prove that it is the promised game. Runtime liveness alone is not considered gameplay correctness.

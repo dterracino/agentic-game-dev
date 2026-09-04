@@ -48,6 +48,7 @@ class FakeProvider:
         self.syntax_failed = False
         self.calls: Counter[str] = Counter()
         self.prompts: list[tuple[str, str]] = []
+        self.role_prompts: list[str] = []
         self.main_saw_game_checkpoint = False
         self.files = {
             "main.py": (
@@ -64,6 +65,7 @@ class FakeProvider:
         }
 
     async def text(self, *, role: str, prompt: str) -> str:
+        self.role_prompts.append(role)
         if "lead game designer" in role:
             name = "designer"
         elif "game-design implementation reviewer" in role:
@@ -85,6 +87,7 @@ class FakeProvider:
         description: str,
         schema: dict[str, Any],
     ) -> dict[str, Any]:
+        self.role_prompts.append(role)
         self.calls[tool_name] += 1
         self.prompts.append((tool_name, prompt))
         if tool_name == "submit_game_plan":
@@ -94,6 +97,8 @@ class FakeProvider:
                 "core_loop": ["move", "decide", "score"],
                 "controls": ["Arrows"],
                 "quality_bar": ["clear", "fair", "responsive", "complete"],
+                "rendering_strategy": "Use pygame-ce for a clear 2D presentation.",
+                "render_effects": [],
                 "dependencies": [],
                 "files": [
                     {"name": "game.py", "purpose": "Game state", "public_api": ["Game"]},
@@ -124,6 +129,8 @@ class FakeProvider:
                     "core_loop": ["move", "decide", "score"],
                     "controls": ["Arrows"],
                     "quality_bar": ["clear", "fair", "responsive", "complete"],
+                    "rendering_strategy": "Use pygame-ce for a clear 2D presentation.",
+                    "render_effects": [],
                     "dependencies": [],
                     "files": [
                         {"name": "game.py", "purpose": "Game state", "public_api": ["Game"]},
