@@ -187,6 +187,38 @@ def make_builder(
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    def test_normalize_plan_preserves_inferred_ui_toolkit_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            builder = GameBuilder(
+                FakeProvider(),
+                GameWorkspace(Path(temp) / "game"),
+                environment=FakeEnvironment(),
+            )
+            plan = GamePlan(
+                title="Parser Adventure",
+                pitch="A graphical parser-driven story.",
+                core_loop=["read", "enter a command", "observe the changed world"],
+                controls=["Type commands and press Enter"],
+                quality_bar=["clear", "responsive", "coherent", "complete"],
+                files=[FileSpec("main.py", "Pygame entry point")],
+                dependencies=[
+                    DependencySpec(
+                        "pygame-gui",
+                        "pygame_gui",
+                        ">=0.6,<1",
+                        "Graphical text interface",
+                    )
+                ],
+            )
+
+            normalized = builder._normalize_plan(plan)
+
+            self.assertEqual(
+                [dependency.requirement for dependency in normalized.dependencies],
+                ["pygame-gui>=0.6,<1", "pygame-ce>=2.5,<3"],
+            )
+            self.assertIsNotNone(normalized.dependency_for_import("pygame_gui"))
+
     async def test_builds_checkpointed_project(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")
@@ -491,15 +523,15 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
             result = builder._handle_missing_dependency(
                 plan,
-                ValidationResult(False, "ModuleNotFoundError: No module named 'numpy'"),
+                ValidationResult(False, "ModuleNotFoundError: No module named 'pygame_gui'"),
             )
 
             self.assertTrue(result.ok)
-            self.assertIn("numpy", approved)
-            self.assertIsNotNone(plan.dependency_for_import("numpy"))
+            self.assertIn("pygame-gui", approved)
+            self.assertIsNotNone(plan.dependency_for_import("pygame_gui"))
             saved = json.loads((workspace.root / "game_plan.json").read_text(encoding="utf-8"))
             self.assertTrue(
-                any(item["distribution"] == "numpy" for item in saved["dependencies"])
+                any(item["distribution"] == "pygame-gui" for item in saved["dependencies"])
             )
 
 

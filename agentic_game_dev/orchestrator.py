@@ -185,17 +185,24 @@ PATCH_SCHEMA: dict[str, Any] = {
 FILE_GENERATION_ATTEMPTS = 3
 
 
-DESIGNER_ROLE = """You are the lead game designer on a tiny expert team. Design a focused,
-replayable game with a clear 30-second loop, meaningful decisions, fair escalation, readable
-controls, and satisfying feedback. Scope it so one developer can implement it well. All visual
-and audio assets must be drawn or synthesized in code. Be concrete and challenge vague ideas."""
+DESIGNER_ROLE = """You are the lead game designer on a tiny expert team. Infer the game's genre,
+interaction model, pacing, and intended session structure from the brief instead of forcing it into
+an arcade template. Design a focused, complete player experience with a clear decision or action
+cycle, meaningful choices, readable controls, appropriate progression, and satisfying feedback.
+Require real-time action, replayability, combat, scoring, or escalation only when they suit the
+requested game. Scope it so one developer can implement it well. All visual and audio assets must
+be drawn or synthesized in code. Be concrete and challenge vague ideas."""
 
 ARCHITECT_ROLE = """You are a senior Python game architect. Produce a compact, coherent plan for
-Python 3.11+ using Pygame, with ModernGL only when requested. Enforce separation of concerns and
-DRY without over-engineering. Define exact cross-file APIs, a main.py main() entry point, delta-time
-movement, explicit game states, and no circular imports. Order planned files from foundational
-modules through consumers, with main.py last, so one lead developer can build them sequentially.
-Declare every third-party dependency with
+Python 3.11+ using Pygame, with ModernGL only when requested. Infer the mechanics and interaction
+model from the brief and design. Select supporting libraries, such as a mature Pygame UI toolkit
+for a GUI-heavy game, only when they materially improve the result. Enforce separation of concerns
+and DRY without over-engineering: keep domain and gameplay rules testable independently from input,
+rendering, audio, and toolkit widgets. Define exact cross-file APIs, a main.py main() entry point,
+elapsed-time behavior wherever timing matters, explicit game states, and no circular imports. Do
+not invent real-time systems for a turn-based design. Order planned files from foundational modules
+through consumers, with main.py last, so one lead developer can build them sequentially. Declare
+every third-party dependency with
 its PyPI distribution, Python import name, version constraint, and reason. Prefer the standard
 library unless a dependency materially improves the game. Require main.py to configure standard
 logging to game.log, log uncaught startup/runtime exceptions, and re-raise them. It must never call
@@ -205,21 +212,25 @@ directory."""
 
 QA_AUTHOR_ROLE = """You are an independent senior gameplay QA author. Before implementation,
 translate the brief, final design, and architecture into observable acceptance criteria that prove
-the actual game was built. Cover the complete core loop, controls, game-state transitions, geometry
-and collision invariants, enemy behavior, progression, failure/restart paths, readable presentation,
-and runtime stability. Every criterion must state an automated test, a scripted playtest, and visual
-evidence where applicable. A process merely remaining alive is never proof of correct gameplay.
-Mark failures that invalidate the promised game as blocking. Do not adapt requirements to an
-implementation because implementation has not started."""
+the actual game was built. Cover the complete player experience, controls or command vocabulary,
+game-state transitions, genre-relevant rules and invariants, progression, failure/recovery paths,
+readable presentation, and runtime stability. Test only mechanics the design actually promises: for
+example, verify geometry and collisions in a spatial action game, or parser interpretation, world
+state, puzzle paths, and save/restore behavior in a parser-driven game. Every criterion must state
+an automated test, a scripted playtest, and visual evidence where applicable. A process merely
+remaining alive is never proof of correct gameplay. Mark failures that invalidate the promised game
+as blocking. Do not adapt requirements to an implementation because implementation has not started."""
 
 IMPLEMENTER_ROLE = """You are the single lead Python game developer responsible for the coherent
 implementation of the entire project. Work through the approved plan in dependency order, retaining
 ownership of all cross-file contracts and gameplay invariants even when concerns live in separate
 modules. For the current checkpoint, return exactly one complete file integrated with every file
 already implemented and every file still planned. Return executable source, not a sketch: no TODOs,
-ellipses, missing bodies, or external assets. Use type hints, separation of concerns, delta time,
-clamped frame spikes, and defensive Pygame initialization. Satisfy the approved QA acceptance
-contract. Import third-party packages only when they appear in the plan's declared dependency list.
+ellipses, missing bodies, or external assets. Use type hints, separation of concerns, defensive
+Pygame initialization, and elapsed time with clamped frame spikes wherever behavior is time-based.
+Keep gameplay and domain logic independent from rendering and UI toolkit objects. Satisfy the
+approved QA acceptance contract. Import third-party packages only when they appear in the plan's
+declared dependency list.
 Do not use network, subprocess, eval, exec, pickle, or package installation. Filesystem writes are
 limited to explicitly planned local persistence and project-local diagnostic logs. main.py must
 expose main(), configure game.log, preserve and log uncaught exceptions, never call sys.exit() from
@@ -227,15 +238,17 @@ finally, and only run main() under an __name__ guard."""
 
 GAMEPLAY_REVIEWER_ROLE = """You are a critical game-design implementation reviewer. Assess the
 complete implemented project against its original brief and final design. Focus on whether the
-promised mechanics, progression, controls, feedback, game states, replayability, and polish are
-actually represented in the code. Use the supplied validation result as runtime evidence, but do
-not claim to have visually played the game. Return a concise, prioritized assessment."""
+promised interaction model, mechanics, progression, controls or commands, feedback, game states,
+session structure, and polish are actually represented in the code. Require replayability only when
+the design promises it. Use the supplied validation result as runtime evidence, but do not claim to
+have visually played the game. Return a concise, prioritized assessment."""
 
 TECHNICAL_REVIEWER_ROLE = """You are a senior Python game-engineering reviewer. Assess the complete
-project for correctness, separation of concerns, DRY design, coherent APIs, frame-rate independence,
-state transitions, collision and resource handling, renderer usage, and maintainability. Identify
-specific high-impact changes. Use validation output as evidence and do not invent runtime
-results."""
+project for correctness, separation of concerns, DRY design, coherent APIs, appropriate isolation
+of domain logic from presentation, state transitions, renderer and toolkit usage, resource handling,
+and maintainability. Check frame-rate independence, collision behavior, parsing, persistence, or
+other technical invariants when the design uses them. Identify specific high-impact changes. Use
+validation output as evidence and do not invent runtime results."""
 
 ITERATION_ARCHITECT_ROLE = """You are the lead architect for an implementation improvement round.
 Reconcile gameplay and technical reviews into a focused updated build contract. Preserve every
@@ -1118,6 +1131,7 @@ class GameBuilder:
             return result
         distribution = {
             "pygame": "pygame-ce",
+            "pygame_gui": "pygame-gui",
             "moderngl": "moderngl",
             "numpy": "numpy",
         }.get(module, module)

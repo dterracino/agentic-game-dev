@@ -17,6 +17,12 @@ A new run proceeds through these durable stages:
 
 This keeps SoC in the generated project without assigning tightly coupled gameplay files to isolated parallel implementers. Independent review calls may still run concurrently.
 
+The game description is also the game-type signal. There is no fixed genre registry: the designer
+infers the appropriate interaction model and pacing, and the architect selects supporting libraries
+through the reviewed dependency plan. For example, a graphical parser adventure can remain a
+Pygame game while declaring `pygame-gui` for its text interface. Turn-based designs are not forced
+to adopt real-time movement, collision, scoring, or arcade-style progression.
+
 Every model request displays an ASCII-safe spinner with elapsed time in an interactive terminal. Redirected output receives a plain waiting message instead.
 
 Generated Python files are parsed immediately. A syntax-invalid response is saved as a diagnostic attempt and returned to the lead for up to three file-local attempts without consuming the later project repair budget.
@@ -26,11 +32,16 @@ Generated Python files are parsed immediately. A syntax-invalid response is save
 Python 3.11 or newer is recommended.
 
 ~~~powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
 Copy-Item .env.example .env
 ~~~
+
+The commands below use the virtual environment's Python executable directly, so PowerShell
+activation is not required. The editable install also creates
+`.\.venv\Scripts\agent-game-dev.exe`; after activating the environment, the shorter
+`agent-game-dev` command works as well. `python agent_game_maker.py` remains available as a
+compatibility entry point when the active Python already has the project dependencies installed.
 
 The .env file is ignored by Git.
 
@@ -57,7 +68,7 @@ No Anthropic key is required for an Ollama run. The selected model must already 
 Command-line options override .env:
 
 ~~~powershell
-agent-game-dev --provider ollama --model qwen3-coder:30b --ollama-host http://192.168.1.50:11434 --output generated_game create "A Qix clone"
+.\.venv\Scripts\python.exe -m agentic_game_dev --provider ollama --model qwen3-coder:30b --ollama-host http://192.168.1.50:11434 --output generated_game create "A Qix clone"
 ~~~
 
 ## Create a game
@@ -65,8 +76,17 @@ agent-game-dev --provider ollama --model qwen3-coder:30b --ollama-host http://19
 Global options go before the command:
 
 ~~~powershell
-agent-game-dev --output generated_game create "A neon arena game where movement paints walls"
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_game create "A neon arena game where movement paints walls"
 ~~~
+
+A brief can describe a different style without selecting a separate game type:
+
+~~~powershell
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_adventure create "An old Infocom-style parser adventure presented as a polished graphical Pygame application"
+~~~
+
+The generated dependency proposal is shown for approval before installation, including an inferred
+UI toolkit such as `pygame-gui` when the architect determines that it materially improves the game.
 
 After design and architecture, the CLI prints the numbered QA acceptance contract and asks:
 
@@ -81,7 +101,7 @@ For a trusted unattended run, use --qa-policy approve. The contract is still gen
 Design and implementation iteration counts remain configurable:
 
 ~~~powershell
-agent-game-dev --output generated_game create "A Qix clone" --design-iterations 3 --implementation-iterations 2
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_game create "A Qix clone" --design-iterations 3 --implementation-iterations 2
 ~~~
 
 Before generated-game packages are installed, the CLI shows every requirement and asks for approval. Use --dependency-policy allow for a trusted unattended run or never to prohibit installs.
@@ -91,7 +111,7 @@ Before generated-game packages are installed, the CLI shows every requirement an
 Checkpoints live under generated_game/.agentic. The journal records the provider, provider host, model, brief, renderer, QA approval, stages, task status, errors, and artifact locations. It never stores an API key.
 
 ~~~powershell
-agent-game-dev --output generated_game resume
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_game resume
 ~~~
 
 Resume uses the saved provider and model so a partially generated project cannot silently switch backends. It restores completed design, QA, implementation, refinement, and repair artifacts and calls a model only for unfinished work.
@@ -99,7 +119,7 @@ Resume uses the saved provider and model so a partially generated project cannot
 If validation needs a larger repair budget:
 
 ~~~powershell
-agent-game-dev --output generated_game resume --add-repair-attempts 2
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_game resume --add-repair-attempts 2
 ~~~
 
 ## Generated environment and dependencies
@@ -128,7 +148,7 @@ generated_game/
 Run a completed game while teeing output to .agentic/playtest.log:
 
 ~~~powershell
-agent-game-dev --output generated_game run
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_game run
 ~~~
 
 Every automated validation appends captured output to .agentic/runtime.log. Runtime, playtest, and game-log tails are supplied to repair and implementation-review agents.
@@ -136,7 +156,7 @@ Every automated validation appends captured output to .agentic/runtime.log. Runt
 Apply playtest feedback with:
 
 ~~~powershell
-agent-game-dev --output generated_game refine "Hits need stronger feedback"
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_game refine "Hits need stronger feedback"
 ~~~
 
 ## Important options

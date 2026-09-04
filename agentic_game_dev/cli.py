@@ -264,7 +264,7 @@ async def _execute(args: argparse.Namespace) -> int:
     if args.run:
         print("Running generated code with the game environment.")
         return run_game(workspace.root, game_environment.python)
-    print(f"Run it with: agent-game-dev --output {workspace.root} run")
+    print(f"Run it with: python -m agentic_game_dev --output {workspace.root} run")
     return 0
 
 
