@@ -1,50 +1,106 @@
-# Game Specification
+# Game Specification: [Game Title]
+
+Use this document to describe the game the player should experience. State observable behavior,
+content, rules, constraints, and desired presentation. Leave libraries, renderer techniques,
+shader selection, module layout, and general engineering standards to the generator's renderer
+profile and engineering policy.
+
+Remove instructions and sections that do not apply before using the specification.
 
 ## Vision
 
-A 30–45 minute graphical Infocom-style mystery.
+[Describe the game in one or two sentences: genre, premise, tone, and defining activity.]
+
+Target session length: [for example, 1020 minutes].
+Intended player experience: [for example, thoughtful exploration, tense score chasing, or relaxed
+experimentation].
 
 ## Player Interaction
 
-Commands use VERB NOUN or VERB NOUN WITH NOUN.
-Required verbs: look, examine, take, drop, use, open, talk, inventory.
+[Describe how the player controls or communicates with the game.]
 
-## World
+Required actions or commands:
 
-Six interconnected rooms.
-The player begins in the study.
-Room connections must always be internally consistent.
+- [Action and input]
+- [Action and input]
 
-## State
+[State important interaction constraints, such as whether movement can be redirected in midair,
+commands accept synonyms, or actions consume turns.]
 
-Track player location, inventory, object locations, unlocked passages,
-NPC dialogue progress, solved puzzles, and ending state.
+## World and Content
 
-## Inventory
+[Describe the authored play space, important locations or levels, entities, items, hazards,
+puzzles, and their relationships.]
 
-No inventory capacity limit.
+Content requirements:
 
-## Puzzles
+- [Required location, encounter, puzzle, item, or level feature]
+- [Required location, encounter, puzzle, item, or level feature]
 
-Two puzzles.
-Every required item must remain obtainable.
-The game must not enter an unwinnable state.
+## Rules and Invariants
 
-## Interface
+[Describe the rules that must always hold and the meaningful consequences of player actions.]
 
-Use pygame-ce and pygame-gui.
-Scrollable transcript, command entry, inventory panel, location name,
-and an internal map visualization.
+- [Core rule]
+- [Fairness, reachability, consistency, or winnability invariant]
+- [Behavior that must never produce an unwinnable or invalid state]
 
-## Architecture
+## State and Persistence
 
-Parser and world rules must not import pygame or pygame_gui.
-Only the application and presentation layers may use GUI objects.
+Track:
 
-## Completion
+- [Player state]
+- [World or level state]
+- [Progression state]
 
-A winning command sequence must be documented and executable.
+[State what resets after failure, what survives between attempts, and whether anything is saved
+between application runs. Delete this paragraph if no persistence is required.]
+
+## Progression, Success, and Failure
+
+[Describe how challenge or complexity develops during a session.]
+
+Success condition: [Observable condition that completes the game or stage.]
+
+Failure condition: [Observable condition that ends or resets an attempt.]
+
+Recovery behavior: [Respawn, restart, undo, save/restore, or another recovery path.]
+
+## Presentation and Feedback
+
+Visual style: [Describe the desired look and mood without prescribing implementation technology.]
+
+Desired visual effects and their player-facing purpose:
+
+- [Effect as the player should perceive it]  [What event or state it communicates]
+- [Effect as the player should perceive it]  [What event or state it communicates]
+
+Audio and interaction feedback:
+
+- [Sound, animation, text, or response required for an important action]
+
+Readability requirements:
+
+- [Information that must remain legible or distinguishable]
+- [Effects that must not hide gameplay-critical information]
+
+## Completion and Acceptance
+
+The finished game must demonstrate:
+
+- [A complete playable path from the initial state to success]
+- [A representative failure and recovery path]
+- [A rule, state transition, or content invariant that can be checked deterministically]
+- [Observable evidence for each promised presentation effect]
+
+[Include a winning command sequence, test route, or reproducible completion scenario when useful.]
 
 ## Non-goals
 
-No combat, real-time deadline, procedural generation, or external assets.
+- [Explicitly excluded mechanic, mode, content type, or scope expansion]
+- [Explicitly excluded mechanic, mode, content type, or scope expansion]
+
+## Designer Latitude
+
+[List decisions the designer may make while filling genuine gaps, such as exact names, layout,
+dialogue wording, numerical tuning, color palette, or optional polish.]

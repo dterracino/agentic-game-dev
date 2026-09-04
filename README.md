@@ -25,7 +25,9 @@ to adopt real-time movement, collision, scoring, or arcade-style progression.
 
 Every model request displays an ASCII-safe spinner with elapsed time in an interactive terminal. Redirected output receives a plain waiting message instead.
 
-Generated Python files are parsed immediately. A syntax-invalid response is saved as a diagnostic attempt and returned to the lead for up to three file-local attempts without consuming the later project repair budget.
+Generated Python files are parsed immediately, while planned GLSL files are checked as safe,
+non-empty source. An invalid response is saved as a diagnostic attempt and returned to the lead for
+up to three file-local attempts without consuming the later project repair budget.
 
 ## Setup
 
@@ -162,6 +164,9 @@ generated_game/
   QA_ACCEPTANCE.md
   requirements.txt
   game_plan.json
+  shaders/
+    effect_name.vert
+    effect_name.frag
   main.py
   ...
 ~~~
@@ -208,7 +213,9 @@ to implement those effects.
 With `--renderer moderngl`, the generated build contract must map each requested visual effect to
 its concrete GPU or simpler rendering technique, owning module, and observable validation method.
 The generated project must actually import ModernGL, create a context, and compile a vertex/fragment
-shader program; declaring the dependency alone fails validation.
+shader program; declaring the dependency alone fails validation. Shader sources can be generated as
+standalone files such as `shaders/bloom.vert`, `shaders/bloom.frag`, or a shared
+`shaders/effects.glsl`.
 
 Project-wide engineering rules are maintained separately from game specifications. The built-in
 policy applies separation of concerns, DRY, explicit ownership, acyclic typed APIs, testable domain
@@ -220,7 +227,10 @@ The built-in runtime probe proves that the program imports, starts, and remains 
 
 ## Safety
 
-Generated source is restricted to validated project-local Python paths. Package installation is performed by the trusted coordinator only after a structured plan and approval. Generated agents cannot supply package URLs, shell commands, Git repositories, or alternate indexes.
+Generated source is restricted to validated project-local Python and GLSL paths. Package
+installation is performed by the trusted coordinator only after a structured plan and approval.
+Generated agents cannot supply package URLs, shell commands, Git repositories, or alternate
+indexes.
 
 These controls reduce risk but cannot prove arbitrary generated code is safe. Review generated files before running games made from untrusted prompts.
 

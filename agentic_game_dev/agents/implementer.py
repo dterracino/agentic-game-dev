@@ -17,4 +17,5 @@ network, subprocess, eval, exec,
 pickle, or package installation. Filesystem writes are limited to explicitly planned local
 persistence and project-local diagnostic logs. main.py must expose main(), configure game.log,
 preserve and log uncaught exceptions, never call sys.exit() from finally, and only run main() under
-an __name__ guard."""
+an __name__ guard. When assigned a .vert, .frag, or .glsl file, return complete GLSL source and
+apply shader conventions instead of Python-specific conventions."""

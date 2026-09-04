@@ -12,7 +12,9 @@ independently from input, rendering, audio, and toolkit widgets. Define exact cr
 main.py main() entry point, elapsed-time behavior wherever timing matters, explicit game states, and
 no circular imports. Do not invent real-time systems for a turn-based design. Order planned files
 from foundational modules through consumers, with main.py last, so one lead developer can build
-them sequentially. Declare every third-party dependency with its PyPI distribution, Python import
+them sequentially. Plans may include safe project-local .vert, .frag, and .glsl shader source files
+alongside Python files when the renderer benefits from them. Declare every third-party dependency
+with its PyPI distribution, Python import
 name, version constraint, and reason. Prefer the standard library unless a dependency materially
 improves the game. Require main.py to configure standard logging to game.log, log uncaught
 startup/runtime exceptions, and re-raise them. It must never call sys.exit() from a finally block or

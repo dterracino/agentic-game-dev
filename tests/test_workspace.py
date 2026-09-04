@@ -44,6 +44,34 @@ class WorkspaceTests(unittest.TestCase):
                 ["game/__init__.py", "game/core/constants.py"],
             )
 
+    def test_writes_and_reads_standalone_shader_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(replace=False)
+
+            workspace.write_generated_source(
+                "shaders/bloom.vert",
+                "#version 330\nvoid main() { gl_Position = vec4(0.0); }",
+            )
+            workspace.write_generated_source(
+                "shaders/bloom.frag",
+                "#version 330\nout vec4 color;\nvoid main() { color = vec4(1.0); }",
+            )
+
+            sources = workspace.read_generated_sources()
+            self.assertEqual(
+                sorted(sources),
+                ["shaders/bloom.frag", "shaders/bloom.vert"],
+            )
+
+    def test_rejects_empty_shader_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(replace=False)
+
+            with self.assertRaisesRegex(WorkspaceError, "shader source is empty"):
+                workspace.write_generated_source("shaders/empty.glsl", "  \n")
+
     def test_writes_plan_and_valid_python(self) -> None:
         plan = GamePlan(
             title="Test",

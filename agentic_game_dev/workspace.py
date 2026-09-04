@@ -11,6 +11,7 @@ from .models import GamePlan
 
 SAFE_PATH_PART = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_SUPPORT_FILES = {".gitignore", "requirements.txt", "QA_ACCEPTANCE.md"}
+GENERATED_SOURCE_SUFFIXES = {".py", ".vert", ".frag", ".glsl"}
 
 
 class WorkspaceError(RuntimeError):
@@ -54,8 +55,8 @@ class GameWorkspace:
             relative.is_absolute()
             or not parts
             or any(part in {"", ".", ".."} for part in parts)
-            or not relative.name.endswith(".py")
-            or not SAFE_PATH_PART.fullmatch(relative.name.removesuffix(".py"))
+            or relative.suffix not in GENERATED_SOURCE_SUFFIXES
+            or not SAFE_PATH_PART.fullmatch(relative.stem)
             or any(not SAFE_PATH_PART.fullmatch(part) for part in parts[:-1])
         ):
             raise WorkspaceError(f"Unsafe generated filename: {filename!r}")
@@ -80,8 +81,20 @@ class GameWorkspace:
             raise WorkspaceError(f"Cannot read game plan: {exc}") from exc
 
     def write_python(self, filename: str, content: str) -> None:
+        if Path(filename).suffix != ".py":
+            raise WorkspaceError(f"Expected a Python filename: {filename!r}")
         ast.parse(content, filename=filename)
         self._atomic_write(self.path_for(filename), content.rstrip() + "\n")
+
+    def write_generated_source(self, filename: str, content: str) -> None:
+        path = self.path_for(filename)
+        if path.suffix == ".py":
+            ast.parse(content, filename=filename)
+        elif not content.strip():
+            raise WorkspaceError(f"Generated shader source is empty: {filename!r}")
+        if "\x00" in content:
+            raise WorkspaceError(f"Generated source contains a null byte: {filename!r}")
+        self._atomic_write(path, content.rstrip() + "\n")
 
     def write_support_file(self, filename: str, content: str) -> None:
         if filename not in SAFE_SUPPORT_FILES:
@@ -93,6 +106,15 @@ class GameWorkspace:
             path.relative_to(self.root).as_posix(): path.read_text(encoding="utf-8")
             for path in sorted(self.root.rglob("*.py"))
             if ".venv" not in path.relative_to(self.root).parts
+        }
+
+    def read_generated_sources(self) -> dict[str, str]:
+        return {
+            path.relative_to(self.root).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file()
+            and path.suffix in GENERATED_SOURCE_SUFFIXES
+            and not {".venv", ".agentic"}.intersection(path.relative_to(self.root).parts)
         }
 
     @staticmethod

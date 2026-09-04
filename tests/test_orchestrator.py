@@ -62,6 +62,11 @@ class FakeProvider:
                 "    main()\n"
             ),
             "game.py": "class Game:\n    pass\n",
+            "shaders/glow.frag": (
+                "#version 330\n"
+                "out vec4 frag_color;\n"
+                "void main() { frag_color = vec4(1.0); }\n"
+            ),
         }
 
     async def text(self, *, role: str, prompt: str) -> str:
@@ -152,8 +157,15 @@ class FakeProvider:
                 ],
                 "summary": "Add a separated text-rendering responsibility.",
             }
-        if tool_name == "submit_python_file":
-            name = "main.py" if "Your assigned file: main.py" in prompt else "game.py"
+        if tool_name == "submit_source_file":
+            name = next(
+                (
+                    candidate
+                    for candidate in self.files
+                    if f"Your assigned file: {candidate}" in prompt
+                ),
+                "game.py",
+            )
             self.calls[f"file:{name}"] += 1
             if name == "main.py" and "Project implemented so far:" in prompt:
                 self.main_saw_game_checkpoint = "class Game:" in prompt
@@ -221,7 +233,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             implementation_prompts = [
                 prompt
                 for kind, prompt in provider.prompts
-                if kind == "submit_python_file"
+                if kind == "submit_source_file"
             ]
             self.assertTrue(implementation_prompts)
             self.assertTrue(
@@ -455,6 +467,39 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(provider.calls["file:game.py"], 1)
             self.assertIn("class Game", (workspace.root / "game.py").read_text())
             self.assertTrue(builder.journal.task_complete(task_name))
+
+    async def test_generates_standalone_shader_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(False)
+            environment = FakeEnvironment()
+            provider = FakeProvider()
+            builder = make_builder(provider, workspace, environment, [])
+            builder.journal = RunJournal.create(
+                workspace.root,
+                brief="test",
+                model=provider.model,
+                renderer="moderngl",
+                repair_attempts=0,
+                smoke_timeout=0.05,
+            )
+            spec = FileSpec("shaders/glow.frag", "Soft glow fragment shader")
+            plan = GamePlan(
+                title="Test",
+                pitch="Test",
+                core_loop=["move", "decide", "score"],
+                controls=["Arrows"],
+                quality_bar=["clear", "fair", "responsive", "complete"],
+                files=[spec, FileSpec("main.py", "Entry")],
+            )
+
+            await builder._generate_file_checkpoint(spec, plan, "Approved QA")
+
+            shader = workspace.root / "shaders" / "glow.frag"
+            self.assertTrue(shader.is_file())
+            self.assertIn("#version 330", shader.read_text(encoding="utf-8"))
+            self.assertTrue(builder.journal.task_complete("file:shaders/glow.frag"))
+
     async def test_resume_reuses_paid_calls_and_completed_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")

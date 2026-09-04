@@ -50,9 +50,8 @@ MODERNGL_PROFILE = RendererProfile(
         "Define render-pass order, framebuffer and texture ownership, resize behavior, uniforms, "
         "blending, and cleanup. Establish one texture-coordinate/orientation convention and flip "
         "at most once.",
-        "Keep GLSL source in dedicated rendering/shader modules rather than mixing it into "
-        "gameplay state. The current generator emits Python files, so dedicated Python "
-        "shader-source modules are acceptable.",
+        "Keep GLSL in dedicated project-local shader source files such as shaders/effect.vert, "
+        "shaders/effect.frag, or shaders/effect.glsl rather than mixing it into gameplay state.",
         "Map every visual effect requested by the brief or specification to an owner, concrete "
         "technique, and observable validation method.",
         "Keep simulation and gameplay rules independent from the GPU context.",

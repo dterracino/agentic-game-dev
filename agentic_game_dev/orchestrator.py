@@ -103,7 +103,7 @@ PLAN_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "name": {
                         "type": "string",
-                        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\\.py$",
+                        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\\.(?:py|vert|frag|glsl)$",
                     },
                     "purpose": {"type": "string"},
                     "public_api": {"type": "array", "items": {"type": "string"}},
@@ -180,7 +180,7 @@ ITERATION_PLAN_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\\.py$",
+                        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\\.(?:py|vert|frag|glsl)$",
                     },
                     "reason": {"type": "string"},
                 },
@@ -494,7 +494,7 @@ class GameBuilder:
         for replacement in patch["files"]:
             filename = str(replacement["filename"])
             content = str(replacement["content"])
-            self.workspace.write_python(filename, content)
+            self.workspace.write_generated_source(filename, content)
             if filename not in specs:
                 spec = FileSpec(
                     name=filename,
@@ -653,7 +653,7 @@ class GameBuilder:
                         f"Original brief:\n{brief}\n\nCurrent contract:\n"
                         f"{current_plan.as_context()}\n\nGameplay review:\n{gameplay_review}\n\n"
                         f"Technical review:\n{technical_review}\n\nSubmit the complete updated "
-                        "contract and the exact Python files to change. Preserve all existing "
+                        "contract and the exact source files to change. Preserve all existing "
                         "planned filenames; add files only for genuine new responsibilities."
                     ),
                     tool_name="submit_iteration_plan",
@@ -725,8 +725,8 @@ class GameBuilder:
         if result.get("filename") != spec.name:
             raise WorkspaceError(f"Corrupt iteration checkpoint for {spec.name}")
         try:
-            self.workspace.write_python(spec.name, str(result["content"]))
-        except SyntaxError as exc:
+            self.workspace.write_generated_source(spec.name, str(result["content"]))
+        except (SyntaxError, WorkspaceError) as exc:
             self.progress(
                 f"    Ignoring invalid round {round_number} checkpoint "
                 f"for {spec.name}: {exc}"
@@ -748,7 +748,7 @@ class GameBuilder:
         snapshot: str,
     ) -> str:
         task_name = f"iteration:{round_number:03d}:file:{spec.name}"
-        return await self._generate_valid_python_checkpoint(
+        return await self._generate_valid_source_checkpoint(
             task_name=task_name,
             artifact_name=f"iterations/{round_number:03d}/files/{spec.name}.json",
             spec=spec,
@@ -767,7 +767,7 @@ class GameBuilder:
     def _project_snapshot(self) -> str:
         return "\n\n".join(
             f"===== {name} =====\n{content}"
-            for name, content in self.workspace.read_python_files().items()
+            for name, content in self.workspace.read_generated_sources().items()
         )
 
     def _diagnostic_logs(self) -> str:
@@ -932,8 +932,8 @@ class GameBuilder:
         if result.get("filename") != spec.name:
             raise WorkspaceError(f"Corrupt file checkpoint for {spec.name}")
         try:
-            self.workspace.write_python(spec.name, str(result["content"]))
-        except SyntaxError as exc:
+            self.workspace.write_generated_source(spec.name, str(result["content"]))
+        except (SyntaxError, WorkspaceError) as exc:
             self.progress(f"  Ignoring invalid checkpoint for {spec.name}: {exc}")
             return False
         if not journal.task_complete(task_name):
@@ -948,7 +948,7 @@ class GameBuilder:
         qa_contract: str,
     ) -> str:
         task_name = f"file:{spec.name}"
-        return await self._generate_valid_python_checkpoint(
+        return await self._generate_valid_source_checkpoint(
             task_name=task_name,
             artifact_name=f"files/{spec.name}.json",
             spec=spec,
@@ -966,7 +966,7 @@ class GameBuilder:
             ),
         )
 
-    async def _generate_valid_python_checkpoint(
+    async def _generate_valid_source_checkpoint(
         self,
         *,
         task_name: str,
@@ -982,8 +982,8 @@ class GameBuilder:
                 result = await self.provider.structured(
                     role=self._technical_role(ImplementerRole),
                     prompt=prompt + retry_context,
-                    tool_name="submit_python_file",
-                    description="Submit one complete validated Python source file.",
+                    tool_name="submit_source_file",
+                    description="Submit one complete validated Python or GLSL source file.",
                     schema=FILE_SCHEMA,
                 )
                 try:
@@ -992,7 +992,7 @@ class GameBuilder:
                             f"Implementer returned {result['filename']!r}; "
                             f"expected {spec.name!r}"
                         )
-                    self.workspace.write_python(spec.name, str(result["content"]))
+                    self.workspace.write_generated_source(spec.name, str(result["content"]))
                 except (SyntaxError, WorkspaceError) as exc:
                     failed = dict(result)
                     failed["validation_error"] = str(exc)
@@ -1007,7 +1007,7 @@ class GameBuilder:
                         f"Retrying ({attempt + 1}/{FILE_GENERATION_ATTEMPTS})..."
                     )
                     retry_context = (
-                        "\n\nYour previous response failed local Python source validation.\n"
+                        "\n\nYour previous response failed local source validation.\n"
                         f"Validation error: {exc}\n\nPrevious invalid source:\n"
                         f"{result.get('content', '')}\n\nReturn a corrected complete file."
                     )
@@ -1114,7 +1114,9 @@ class GameBuilder:
         module = result.missing_module
         if result.ok or not module:
             return result
-        if module in {Path(spec.name).stem for spec in plan.files}:
+        if module in {
+            Path(spec.name).stem for spec in plan.files if Path(spec.name).suffix == ".py"
+        }:
             return result
         if plan.dependency_for_import(module):
             return result
@@ -1217,7 +1219,8 @@ class GameBuilder:
         allow_new: bool = False,
     ) -> dict[str, Any]:
         filename_policy = (
-            "Existing filenames may be modified. New safe nested .py modules are allowed when "
+            "Existing filenames may be modified. New safe nested .py, .vert, .frag, or .glsl "
+            "source files are allowed when "
             "they represent a distinct responsibility and improve separation of concerns."
             if allow_new
             else f"Allowed filenames: {sorted(allowed_names)}"
@@ -1240,7 +1243,7 @@ class GameBuilder:
             filename = str(replacement["filename"])
             if filename not in allowed:
                 raise WorkspaceError(f"Reviewer attempted to write unplanned file {filename!r}")
-            self.workspace.write_python(filename, str(replacement["content"]))
+            self.workspace.write_generated_source(filename, str(replacement["content"]))
         if patch.get("summary"):
             self.progress(f"  Reviewer: {patch['summary']}")
 
