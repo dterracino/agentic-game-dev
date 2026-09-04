@@ -6,6 +6,16 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
+from .agents import (
+    ArchitectRole,
+    DesignerRole,
+    GameplayReviewerRole,
+    ImplementerRole,
+    IterationArchitectRole,
+    QaAuthorRole,
+    RepairReviewerRole,
+    TechnicalReviewerRole,
+)
 from .environment import GameEnvironment
 from .journal import RunJournal
 from .models import DependencySpec, FileSpec, GamePlan
@@ -189,85 +199,14 @@ KNOWN_DEPENDENCY_CONSTRAINTS: dict[str, tuple[str, str]] = {
 }
 
 
-DESIGNER_ROLE = """You are the lead game designer on a tiny expert team. Infer the game's genre,
-interaction model, pacing, and intended session structure from the brief instead of forcing it into
-an arcade template. Design a focused, complete player experience with a clear decision or action
-cycle, meaningful choices, readable controls, appropriate progression, and satisfying feedback.
-Require real-time action, replayability, combat, scoring, or escalation only when they suit the
-requested game. Scope it so one developer can implement it well. All visual and audio assets must
-be drawn or synthesized in code. Be concrete and challenge vague ideas."""
-
-ARCHITECT_ROLE = """You are a senior Python game architect. Produce a compact, coherent plan for
-Python 3.11+ using Pygame, with ModernGL only when requested. Infer the mechanics and interaction
-model from the brief and design. Select supporting libraries, such as a mature Pygame UI toolkit
-for a GUI-heavy game, only when they materially improve the result. Enforce separation of concerns
-and DRY without over-engineering: keep domain and gameplay rules testable independently from input,
-rendering, audio, and toolkit widgets. Define exact cross-file APIs, a main.py main() entry point,
-elapsed-time behavior wherever timing matters, explicit game states, and no circular imports. Do
-not invent real-time systems for a turn-based design. Order planned files from foundational modules
-through consumers, with main.py last, so one lead developer can build them sequentially. Declare
-every third-party dependency with
-its PyPI distribution, Python import name, version constraint, and reason. Prefer the standard
-library unless a dependency materially improves the game. Require main.py to configure standard
-logging to game.log, log uncaught startup/runtime exceptions, and re-raise them. It must never call
-sys.exit() from a finally block or otherwise turn failures into successful exits. Never propose
-shell commands, network access, dynamic code execution, or file access outside the game
-directory."""
-
-QA_AUTHOR_ROLE = """You are an independent senior gameplay QA author. Before implementation,
-translate the brief, final design, and architecture into observable acceptance criteria that prove
-the actual game was built. Cover the complete player experience, controls or command vocabulary,
-game-state transitions, genre-relevant rules and invariants, progression, failure/recovery paths,
-readable presentation, and runtime stability. Test only mechanics the design actually promises: for
-example, verify geometry and collisions in a spatial action game, or parser interpretation, world
-state, puzzle paths, and save/restore behavior in a parser-driven game. Every criterion must state
-an automated test, a scripted playtest, and visual evidence where applicable. A process merely
-remaining alive is never proof of correct gameplay. Mark failures that invalidate the promised game
-as blocking. Do not adapt requirements to an implementation because implementation has not started."""
-
-IMPLEMENTER_ROLE = """You are the single lead Python game developer responsible for the coherent
-implementation of the entire project. Work through the approved plan in dependency order, retaining
-ownership of all cross-file contracts and gameplay invariants even when concerns live in separate
-modules. For the current checkpoint, return exactly one complete file integrated with every file
-already implemented and every file still planned. Return executable source, not a sketch: no TODOs,
-ellipses, missing bodies, or external assets. Use type hints, separation of concerns, defensive
-Pygame initialization, and elapsed time with clamped frame spikes wherever behavior is time-based.
-Keep gameplay and domain logic independent from rendering and UI toolkit objects. Satisfy the
-approved QA acceptance contract. Import third-party packages only when they appear in the plan's
-declared dependency list.
-Do not use network, subprocess, eval, exec, pickle, or package installation. Filesystem writes are
-limited to explicitly planned local persistence and project-local diagnostic logs. main.py must
-expose main(), configure game.log, preserve and log uncaught exceptions, never call sys.exit() from
-finally, and only run main() under an __name__ guard."""
-
-GAMEPLAY_REVIEWER_ROLE = """You are a critical game-design implementation reviewer. Assess the
-complete implemented project against its original brief and final design. Focus on whether the
-promised interaction model, mechanics, progression, controls or commands, feedback, game states,
-session structure, and polish are actually represented in the code. Require replayability only when
-the design promises it. Use the supplied validation result as runtime evidence, but do not claim to
-have visually played the game. Return a concise, prioritized assessment."""
-
-TECHNICAL_REVIEWER_ROLE = """You are a senior Python game-engineering reviewer. Assess the complete
-project for correctness, separation of concerns, DRY design, coherent APIs, appropriate isolation
-of domain logic from presentation, state transitions, renderer and toolkit usage, resource handling,
-and maintainability. Check frame-rate independence, collision behavior, parsing, persistence, or
-other technical invariants when the design uses them. Identify specific high-impact changes. Use
-validation output as evidence and do not invent runtime results."""
-
-ITERATION_ARCHITECT_ROLE = """You are the lead architect for an implementation improvement round.
-Reconcile gameplay and technical reviews into a focused updated build contract. Preserve every
-existing planned file; additions are allowed when they represent genuine new responsibilities and
-improve separation of concerns. Select only files that genuinely need changes. Declare every
-third-party import. Never weaken working functionality merely to simplify testing."""
-
-REVIEWER_ROLE = """You are a meticulous senior gameplay and Python reviewer. Given the complete
-small project and validation report, return full replacements only for files that need fixes.
-Prioritize crashes, import/API mismatches, unwinnable or unclear play, frame-rate dependence,
-missing state transitions, bad collision logic, weak feedback, immediate clean exits, and exception
-handlers or finally blocks that mask failures. Preserve the architecture and declared dependency
-policy. Never introduce undeclared packages, external assets, network,
-subprocess, eval, exec, pickle, package installation, or filesystem writes beyond planned local
-persistence and diagnostic logs."""
+DESIGNER_ROLE = DesignerRole.system_prompt()
+ARCHITECT_ROLE = ArchitectRole.system_prompt()
+QA_AUTHOR_ROLE = QaAuthorRole.system_prompt()
+IMPLEMENTER_ROLE = ImplementerRole.system_prompt()
+GAMEPLAY_REVIEWER_ROLE = GameplayReviewerRole.system_prompt()
+TECHNICAL_REVIEWER_ROLE = TechnicalReviewerRole.system_prompt()
+ITERATION_ARCHITECT_ROLE = IterationArchitectRole.system_prompt()
+REVIEWER_ROLE = RepairReviewerRole.system_prompt()
 
 
 class GameBuilder:
@@ -299,9 +238,18 @@ class GameBuilder:
         self.qa_approver = qa_approver or (lambda _contract, _path: True)
         self.journal: RunJournal | None = None
 
-    async def create(self, brief: str, *, replace: bool = False) -> ValidationResult:
+    async def create(
+        self,
+        brief: str,
+        *,
+        replace: bool = False,
+        specification: str = "",
+        specification_source: str = "",
+    ) -> ValidationResult:
         if not brief.strip():
             raise ValueError("The game brief cannot be empty")
+        if specification and not specification.strip():
+            raise ValueError("The game specification cannot be empty")
         self._print_options()
         self.workspace.prepare(replace)
         self.workspace.write_support_file(".gitignore", ".venv/\n__pycache__/\n*.py[cod]\n")
@@ -317,6 +265,8 @@ class GameBuilder:
             design_iterations=self.design_iterations,
             implementation_iterations=self.implementation_iterations,
         )
+        if specification:
+            self.journal.record_specification(specification_source, specification)
         try:
             return await self._continue_run()
         except BaseException as exc:
@@ -354,13 +304,14 @@ class GameBuilder:
     async def _continue_run(self) -> ValidationResult:
         journal = self._journal()
         brief = str(journal.state["brief"])
+        specification = journal.read_specification()
 
         journal.set_stage("design")
         self.progress(
             f"[1/7] Running {self.design_iterations} checkpointed design "
             f"{'pass' if self.design_iterations == 1 else 'passes'}..."
         )
-        design = await self._run_design_iterations(brief)
+        design = await self._run_design_iterations(brief, specification)
 
         journal.set_stage("plan")
         self.progress("[2/7] Architect is producing the dependency-aware build contract...")
@@ -369,6 +320,7 @@ class GameBuilder:
             "planning/architecture.txt",
             role=ARCHITECT_ROLE,
             prompt=(
+                f"{self._specification_context()}"
                 f"Explore a robust architecture for this brief:\n{brief}\n\n"
                 f"Final iterated design:\n{design}\n\nRequested renderer: {self.renderer}"
             ),
@@ -451,22 +403,22 @@ class GameBuilder:
         journal.mark_complete()
         return result
 
-    async def _run_design_iterations(self, brief: str) -> str:
+    async def _run_design_iterations(self, brief: str, specification: str = "") -> str:
         design = ""
         for round_number in range(1, self.design_iterations + 1):
             if round_number == 1:
                 task_name = "designer"
                 artifact_name = "planning/designer.txt"
-                prompt = f"Create a concise game design critique and proposal for:\n{brief}"
             else:
                 task_name = f"design:{round_number:03d}"
                 artifact_name = f"planning/design_{round_number:03d}.txt"
-                prompt = (
-                    f"Original brief:\n{brief}\n\nPrevious design:\n{design}\n\n"
-                    f"This is design pass {round_number}/{self.design_iterations}. Critique the "
-                    "previous design, retain its strongest decisions, resolve weaknesses and vague "
-                    "areas, and return a complete replacement design ready for architecture."
-                )
+            prompt = DesignerRole.build_prompt(
+                brief,
+                specification,
+                previous_design=design,
+                round_number=round_number,
+                total_rounds=self.design_iterations,
+            )
             self.progress(f"  Design pass {round_number}/{self.design_iterations}")
             design = await self._text_checkpoint(
                 task_name, artifact_name, role=DESIGNER_ROLE, prompt=prompt
@@ -586,6 +538,7 @@ class GameBuilder:
         )
         qa_contract = (self.workspace.root / "QA_ACCEPTANCE.md").read_text(encoding="utf-8")
         context = (
+            f"{self._specification_context()}"
             f"Original brief:\n{brief}\n\nFinal design/build contract:\n"
             f"{current_plan.as_context()}\n\nApproved QA contract:\n{qa_contract}\n\n"
             f"Latest validation:\n"
@@ -679,6 +632,7 @@ class GameBuilder:
                 raw = await self.provider.structured(
                     role=ITERATION_ARCHITECT_ROLE,
                     prompt=(
+                        f"{self._specification_context()}"
                         f"Original brief:\n{brief}\n\nCurrent contract:\n"
                         f"{current_plan.as_context()}\n\nGameplay review:\n{gameplay_review}\n\n"
                         f"Technical review:\n{technical_review}\n\nSubmit the complete updated "
@@ -782,6 +736,7 @@ class GameBuilder:
             artifact_name=f"iterations/{round_number:03d}/files/{spec.name}.json",
             spec=spec,
             prompt=(
+                f"{self._specification_context()}"
                 f"Updated complete plan:\n{plan.as_context()}\n\n"
                 f"Gameplay review:\n{gameplay_review}\n\nTechnical review:\n"
                 f"{technical_review}\n\nComplete project before this round:\n{snapshot}\n\n"
@@ -860,6 +815,7 @@ class GameBuilder:
                 raw = await self.provider.structured(
                     role=QA_AUTHOR_ROLE,
                     prompt=(
+                        f"{self._specification_context()}"
                         f"Original brief:\n{brief}\n\nFinal design:\n{design}\n\n"
                         f"Architecture:\n{architecture}\n\nBuild contract:\n{plan.as_context()}\n\n"
                         "Author the preimplementation QA acceptance contract. Make criteria "
@@ -930,6 +886,7 @@ class GameBuilder:
             raw_plan = await self.provider.structured(
                 role=ARCHITECT_ROLE,
                 prompt=(
+                    f"{self._specification_context()}"
                     f"Original brief:\n{brief}\n\nDesigner proposal:\n{design}\n\n"
                     f"Architecture proposal:\n{architecture}\n\nRenderer: {self.renderer}. "
                     "Resolve conflicts and submit the final build contract. Include main.py "
@@ -979,6 +936,7 @@ class GameBuilder:
             artifact_name=f"files/{spec.name}.json",
             spec=spec,
             prompt=(
+                f"{self._specification_context()}"
                 f"Complete plan:\n{plan.as_context()}\n\n"
                 f"Approved QA contract:\n{qa_contract}\n\n"
                 "Project implemented so far:\n"
@@ -1250,7 +1208,7 @@ class GameBuilder:
         return await self.provider.structured(
             role=REVIEWER_ROLE,
             prompt=(
-                f"{context}\n\n{filename_policy}\n\n"
+                f"{self._specification_context()}{context}\n\n{filename_policy}\n\n"
                 f"Complete project:\n{self._project_snapshot()}\n\n"
                 f"Diagnostic log tails:\n{self._diagnostic_logs()}"
             ),
@@ -1496,6 +1454,9 @@ class GameBuilder:
         self.progress(f"  implementation iterations: {self.implementation_iterations}")
         self.progress(f"  repair attempts: {self.repair_attempts}")
         self.progress(f"  game environment: {self.environment.python}")
+
+    def _specification_context(self) -> str:
+        return DesignerRole.specification_section(self._journal().read_specification())
 
     def _journal(self) -> RunJournal:
         if self.journal is None:

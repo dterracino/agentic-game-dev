@@ -47,6 +47,7 @@ class FakeProvider:
         self.iteration_failed = False
         self.syntax_failed = False
         self.calls: Counter[str] = Counter()
+        self.prompts: list[tuple[str, str]] = []
         self.main_saw_game_checkpoint = False
         self.files = {
             "main.py": (
@@ -72,6 +73,7 @@ class FakeProvider:
         else:
             name = "architecture"
         self.calls[name] += 1
+        self.prompts.append((name, prompt))
         return f"A focused {name} proposal."
 
     async def structured(
@@ -84,6 +86,7 @@ class FakeProvider:
         schema: dict[str, Any],
     ) -> dict[str, Any]:
         self.calls[tool_name] += 1
+        self.prompts.append((tool_name, prompt))
         if tool_name == "submit_game_plan":
             return {
                 "title": "Tiny Test",
@@ -187,6 +190,37 @@ def make_builder(
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_specification_is_snapshotted_and_propagated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            provider = FakeProvider()
+            environment = FakeEnvironment()
+
+            result = await make_builder(
+                provider, workspace, environment, []
+            ).create(
+                "Build this parser adventure",
+                specification="# Rules\nInventory has no capacity limit.",
+                specification_source="adventure.md",
+            )
+
+            self.assertTrue(result.ok, result.report)
+            journal = RunJournal.load(workspace.root)
+            self.assertIn("Inventory has no capacity limit", journal.read_specification())
+            for name in ("designer", "architecture", "submit_game_plan", "submit_qa_contract"):
+                prompts = [prompt for kind, prompt in provider.prompts if kind == name]
+                self.assertTrue(prompts, name)
+                self.assertIn("Inventory has no capacity limit", prompts[0])
+            implementation_prompts = [
+                prompt
+                for kind, prompt in provider.prompts
+                if kind == "submit_python_file"
+            ]
+            self.assertTrue(implementation_prompts)
+            self.assertTrue(
+                all("Inventory has no capacity limit" in prompt for prompt in implementation_prompts)
+            )
+
     def test_normalize_plan_preserves_inferred_ui_toolkit_dependency(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             builder = GameBuilder(

@@ -88,6 +88,29 @@ A brief can describe a different style without selecting a separate game type:
 The generated dependency proposal is shown for approval before installation, including an inferred
 UI toolkit such as `pygame-gui` when the architect determines that it materially improves the game.
 
+### Start from a game specification
+
+When you already know how the game should work, provide a UTF-8 Markdown or text specification:
+
+A starter template is available in [game_spec.md.example](game_spec.md.example).
+
+~~~powershell
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_adventure create --spec game_spec.md "Build this parser adventure"
+~~~
+
+The positional brief remains useful as a short statement of intent. If it is omitted, the tool uses
+the specification filename to create a neutral brief instead of prompting for another description:
+
+~~~powershell
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_adventure create --spec game_spec.md
+~~~
+
+With a specification, the designer reviews it for contradictions and feasibility, preserves its
+explicit decisions, and fills only genuine gaps. Without one, the designer continues to develop the
+game from the brief. The original specification is snapshotted under
+`.agentic/artifacts/input/game_spec.md` and reused by architecture, QA, implementation,
+refinement, and resume even if the source file later changes.
+
 After design and architecture, the CLI prints the numbered QA acceptance contract and asks:
 
 ~~~text
@@ -186,6 +209,10 @@ Generated source is restricted to validated project-local Python paths. Package 
 These controls reduce risk but cannot prove arbitrary generated code is safe. Review generated files before running games made from untrusted prompts.
 
 ## Development
+
+Agent role definitions live under `agentic_game_dev/agents/`. Each role derives from the shared
+`AgentRole` contract, keeping role instructions and role-specific prompt behavior separate from
+the orchestration and checkpointing machinery.
 
 ~~~powershell
 python -m unittest discover -s tests -v

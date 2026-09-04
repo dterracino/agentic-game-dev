@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from agentic_game_dev.cli import _load_environment, _resolve_model, build_parser
+from agentic_game_dev.cli import (
+    _load_environment,
+    _read_specification,
+    _resolve_model,
+    build_parser,
+)
 
 
 class CliEnvironmentTests(unittest.TestCase):
@@ -27,6 +32,26 @@ class CliEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(args.design_iterations, 3)
         self.assertEqual(args.implementation_iterations, 2)
+
+    def test_create_parses_specification_path(self) -> None:
+        args = build_parser().parse_args(
+            ["create", "--spec", "adventure.md", "Build this game"]
+        )
+
+        self.assertEqual(str(args.spec), "adventure.md")
+
+    def test_reads_nonempty_utf8_specification(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "game.md"
+            path.write_text("# Game\nKeep the parser deterministic.\n", encoding="utf-8")
+
+            content, source = _read_specification(path)
+
+            self.assertIn("parser deterministic", content)
+            self.assertEqual(source, str(path.resolve()))
 
     def test_ollama_options_and_model_environment(self) -> None:
         args = build_parser().parse_args(

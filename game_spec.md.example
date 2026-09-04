@@ -1,0 +1,50 @@
+# Game Specification
+
+## Vision
+
+A 30–45 minute graphical Infocom-style mystery.
+
+## Player Interaction
+
+Commands use VERB NOUN or VERB NOUN WITH NOUN.
+Required verbs: look, examine, take, drop, use, open, talk, inventory.
+
+## World
+
+Six interconnected rooms.
+The player begins in the study.
+Room connections must always be internally consistent.
+
+## State
+
+Track player location, inventory, object locations, unlocked passages,
+NPC dialogue progress, solved puzzles, and ending state.
+
+## Inventory
+
+No inventory capacity limit.
+
+## Puzzles
+
+Two puzzles.
+Every required item must remain obtainable.
+The game must not enter an unwinnable state.
+
+## Interface
+
+Use pygame-ce and pygame-gui.
+Scrollable transcript, command entry, inventory panel, location name,
+and an internal map visualization.
+
+## Architecture
+
+Parser and world rules must not import pygame or pygame_gui.
+Only the application and presentation layers may use GUI objects.
+
+## Completion
+
+A winning command sequence must be documented and executable.
+
+## Non-goals
+
+No combat, real-time deadline, procedural generation, or external assets.

@@ -43,6 +43,17 @@ def _load_environment() -> None:
     load_dotenv(override=True)
 
 
+def _read_specification(path: Path) -> tuple[str, str]:
+    resolved = path.expanduser().resolve()
+    try:
+        content = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"Cannot read game specification {resolved}: {exc}") from exc
+    if not content.strip():
+        raise ValueError(f"Game specification is empty: {resolved}")
+    return content, str(resolved)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-game-dev",
@@ -83,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser("create", help="Design and generate a new game")
     create.add_argument("brief", nargs="?", help="Game description; prompted for when omitted")
+    create.add_argument(
+        "--spec",
+        type=Path,
+        help="UTF-8 game specification; snapshotted into the run and treated as authoritative",
+    )
     create.add_argument(
         "--replace", action="store_true", help="Replace a non-empty output directory"
     )
@@ -247,8 +263,21 @@ async def _execute(args: argparse.Namespace) -> int:
             progress=progress,
         )
         if args.command == "create":
-            brief = args.brief or input("Describe the game you want to create: ").strip()
-            result = await builder.create(brief, replace=args.replace)
+            specification = ""
+            specification_source = ""
+            if args.spec:
+                specification, specification_source = _read_specification(args.spec)
+            brief = args.brief
+            if not brief and specification:
+                brief = f"Build the game defined by {Path(specification_source).name}."
+            if not brief:
+                brief = input("Describe the game you want to create: ").strip()
+            result = await builder.create(
+                brief,
+                replace=args.replace,
+                specification=specification,
+                specification_source=specification_source,
+            )
         else:
             feedback = args.feedback or input("Describe what should improve: ").strip()
             result = await builder.refine(feedback)

@@ -153,6 +153,24 @@ class RunJournal:
         self.state["last_error"] = None
         self._save()
 
+    def record_specification(self, source: str, content: str) -> str:
+        artifact = self.write_text_artifact("input/game_spec.md", content)
+        self.state["specification"] = {
+            "source": source,
+            "artifact": artifact,
+        }
+        self._save()
+        return artifact
+
+    def read_specification(self) -> str:
+        metadata = self.state.get("specification")
+        if not isinstance(metadata, dict):
+            return ""
+        artifact = metadata.get("artifact")
+        if not isinstance(artifact, str) or not artifact:
+            return ""
+        return self.read_text_artifact(artifact)
+
     def write_text_artifact(self, relative: str, content: str) -> str:
         path = self._artifact_path(relative)
         self._atomic_write_text(path, content.rstrip() + "\n")

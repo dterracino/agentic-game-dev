@@ -8,6 +8,31 @@ from agentic_game_dev.journal import RunJournal
 
 
 class JournalTests(unittest.TestCase):
+    def test_specification_is_snapshotted_and_read_from_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            journal = RunJournal.create(
+                root,
+                brief="test",
+                model="test-model",
+                renderer="pygame",
+                repair_attempts=2,
+                smoke_timeout=8,
+            )
+
+            artifact = journal.record_specification(
+                "C:/designs/game.md", "# Game\nAuthoritative rule."
+            )
+            loaded = RunJournal.load(root)
+
+            self.assertEqual(artifact, "artifacts/input/game_spec.md")
+            self.assertEqual(
+                loaded.read_specification(), "# Game\nAuthoritative rule.\n"
+            )
+            self.assertEqual(
+                loaded.state["specification"]["source"], "C:/designs/game.md"
+            )
+
     def test_running_task_becomes_pending_after_reload(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
