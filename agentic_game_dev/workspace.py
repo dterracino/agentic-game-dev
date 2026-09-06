@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import os
 import re
 import shutil
+import tokenize
 from pathlib import Path, PurePosixPath
 
 from .models import GamePlan
 
 SAFE_PATH_PART = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SAFE_SUPPORT_FILES = {".gitignore", "requirements.txt", "QA_ACCEPTANCE.md"}
+SAFE_SUPPORT_FILES = {
+    ".gitignore",
+    "requirements.txt",
+    "QA_ACCEPTANCE.md",
+    "pyrightconfig.json",
+}
 GENERATED_SOURCE_SUFFIXES = {".py", ".vert", ".frag", ".glsl"}
 
 
@@ -87,14 +94,137 @@ class GameWorkspace:
         self._atomic_write(self.path_for(filename), content.rstrip() + "\n")
 
     def write_generated_source(self, filename: str, content: str) -> None:
+        path = self.validate_generated_source(filename, content)
+        self._atomic_write(path, content.rstrip() + "\n")
+
+    def validate_generated_source(self, filename: str, content: str) -> Path:
+        """Validate a generated source response without changing the workspace."""
         path = self.path_for(filename)
         if path.suffix == ".py":
-            ast.parse(content, filename=filename)
+            tree = ast.parse(content, filename=filename)
+            self._reject_placeholder_python(filename, content, tree)
         elif not content.strip():
             raise WorkspaceError(f"Generated shader source is empty: {filename!r}")
         if "\x00" in content:
             raise WorkspaceError(f"Generated source contains a null byte: {filename!r}")
-        self._atomic_write(path, content.rstrip() + "\n")
+        return path
+
+    def write_typecheck_config(self) -> None:
+        """Write the coordinator-owned strict configuration used by Pyright and Pylance."""
+        config = {
+            "include": ["."],
+            "exclude": [".agentic", ".venv"],
+            "typeCheckingMode": "strict",
+        }
+        self.write_support_file("pyrightconfig.json", json.dumps(config, indent=2))
+
+    @staticmethod
+    def _reject_placeholder_python(
+        filename: str, content: str, tree: ast.AST
+    ) -> None:
+        provisional = re.compile(
+            r"\b(?:TODO|placeholder|not implemented|would be implemented|for now)\b",
+            re.IGNORECASE,
+        )
+        try:
+            comments = (
+                token.string
+                for token in tokenize.generate_tokens(io.StringIO(content).readline)
+                if token.type == tokenize.COMMENT
+            )
+            comment_list = list(comments)
+            matching_comment = next(
+                (comment for comment in comment_list if provisional.search(comment)), None
+            )
+        except tokenize.TokenError as exc:
+            raise WorkspaceError(
+                f"Generated Python tokenization failed for {filename!r}: {exc}"
+            ) from exc
+        if matching_comment:
+            raise WorkspaceError(
+                f"Generated Python contains provisional implementation language in "
+                f"{filename!r}: {matching_comment.strip()}"
+            )
+        type_suppression = next(
+            (
+                comment
+                for comment in comment_list
+                if re.search(
+                    r"#\s*(?:type\s*:\s*ignore\b|pyright\s*:\s*(?:ignore\b|"
+                    r"(?:basic|standard|off)\b|report\w+\s*=\s*(?:false|none)\b))",
+                    comment,
+                    re.IGNORECASE,
+                )
+            ),
+            None,
+        )
+        if type_suppression:
+            raise WorkspaceError(
+                f"Generated Python contains a prohibited type-check suppression in "
+                f"{filename!r}: {type_suppression.strip()}"
+            )
+
+        declaration_functions: set[int] = set()
+        for class_node in (
+            node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ):
+            is_protocol = any(
+                (isinstance(base, ast.Name) and base.id == "Protocol")
+                or (isinstance(base, ast.Attribute) and base.attr == "Protocol")
+                for base in class_node.bases
+            )
+            if is_protocol:
+                declaration_functions.update(
+                    id(member)
+                    for member in class_node.body
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                )
+
+        for node in ast.walk(tree):
+            if not isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                continue
+            body = list(node.body)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]
+            is_stub = len(body) == 1 and (
+                isinstance(body[0], ast.Pass)
+                or (
+                    isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and body[0].value.value is Ellipsis
+                )
+                or (
+                    isinstance(body[0], ast.Raise)
+                    and isinstance(body[0].exc, ast.Call)
+                    and isinstance(body[0].exc.func, ast.Name)
+                    and body[0].exc.func.id == "NotImplementedError"
+                )
+            )
+            if is_stub:
+                decorator_names = {
+                    decorator.id
+                    if isinstance(decorator, ast.Name)
+                    else decorator.attr
+                    if isinstance(decorator, ast.Attribute)
+                    else ""
+                    for decorator in node.decorator_list
+                }
+                if id(node) in declaration_functions or decorator_names.intersection(
+                    {"abstractmethod", "overload"}
+                ):
+                    continue
+                kind = "class" if isinstance(node, ast.ClassDef) else "function"
+                raise WorkspaceError(
+                    f"Generated Python contains stub {kind} {node.name!r} "
+                    f"in {filename!r}"
+                )
 
     def write_support_file(self, filename: str, content: str) -> None:
         if filename not in SAFE_SUPPORT_FILES:

@@ -29,6 +29,11 @@ PYGAME_PROFILE = RendererProfile(
         "Choose proportionate CPU-rendered techniques for requested visual effects; do not add "
         "ModernGL unless the selected renderer changes.",
         "Keep presentation code separate from domain and gameplay state.",
+        "Plan and implement the complete visual asset set. Prefer a dedicated procedural sprite "
+        "or atlas module when binary assets are unavailable; generic placeholder rectangles do "
+        "not satisfy the asset contract.",
+        "Plan and implement required sound effects and ambience in a dedicated audio module. "
+        "Synthesize deterministic mixer-ready samples when recorded assets are unavailable.",
         "Document how each requested visual effect is implemented and how it can be observed.",
     ),
 )
@@ -52,6 +57,14 @@ MODERNGL_PROFILE = RendererProfile(
         "at most once.",
         "Keep GLSL in dedicated project-local shader source files such as shaders/effect.vert, "
         "shaders/effect.frag, or shaders/effect.glsl rather than mixing it into gameplay state.",
+        "Include separate vertex and fragment shader sources in the build plan, using .vert/.frag "
+        "or clearly stage-named .glsl files; assign those exact files to render effects and load "
+        "them from the renderer at runtime.",
+        "Plan and implement the complete visual asset set in dedicated source modules, including "
+        "procedural pixel sprites or atlases when standalone binary art is unavailable. Generic "
+        "placeholder rectangles do not satisfy the asset contract.",
+        "Plan and implement required sound effects and ambience in a dedicated audio module. "
+        "Synthesize deterministic mixer-ready samples when recorded assets are unavailable.",
         "Map every visual effect requested by the brief or specification to an owner, concrete "
         "technique, and observable validation method.",
         "Keep simulation and gameplay rules independent from the GPU context.",

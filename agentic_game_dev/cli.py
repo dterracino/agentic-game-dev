@@ -12,7 +12,7 @@ from .environment import GameEnvironment, GameEnvironmentError
 from .journal import JournalError, RunJournal
 from .models import DependencySpec
 from .orchestrator import GameBuilder
-from .provider import AgentError, ClaudeProvider, OllamaProvider
+from .provider import AgentError, ClaudeProvider, OllamaProvider, OpenAIProvider
 from .validation import run_game
 from .workspace import GameWorkspace, WorkspaceError
 
@@ -61,13 +61,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--provider",
-        choices=("anthropic", "ollama"),
+        choices=("anthropic", "openai", "ollama"),
         default=os.getenv("AGENT_PROVIDER", "anthropic").lower(),
     )
     parser.add_argument(
         "--model",
         default=None,
-        help="Model name; defaults to ANTHROPIC_MODEL or OLLAMA_MODEL for the provider",
+        help=(
+            "Model name; defaults to ANTHROPIC_MODEL, OPENAI_MODEL, or "
+            "OLLAMA_MODEL for the provider"
+        ),
     )
     parser.add_argument(
         "--ollama-host",
@@ -123,6 +126,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Extend the saved repair budget before resuming",
     )
+    resume.add_argument(
+        "--switch-provider",
+        choices=("anthropic", "openai", "ollama"),
+        help="Explicitly use a different provider for unfinished resume work",
+    )
+    resume.add_argument(
+        "--switch-model",
+        help="Model for --switch-provider; otherwise use that provider's environment setting",
+    )
     resume.add_argument("--run", action="store_true", help="Run the game after completion")
 
     subparsers.add_parser("run", help="Run an existing game and append output to its playtest log")
@@ -143,12 +155,22 @@ def _resolve_model(provider_name: str, explicit: str | None) -> str:
                 "OLLAMA_MODEL is not set. Add it to .env or pass --model for an Ollama run."
             )
         return model
+    if provider_name == "openai":
+        model = os.getenv("OPENAI_MODEL", "").strip()
+        if not model:
+            raise RuntimeError(
+                "OPENAI_MODEL is not set. Add it to .env or pass --model "
+                "for an OpenAI run."
+            )
+        return model
     return os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
 
 
 def _require_credentials(provider_name: str) -> None:
     if provider_name == "anthropic" and not os.getenv("ANTHROPIC_API_KEY"):
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
+    if provider_name == "openai" and not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY is not set")
 
 
 def _make_provider(
@@ -160,6 +182,8 @@ def _make_provider(
 ):
     if provider_name == "ollama":
         return OllamaProvider(model, host=ollama_host, activity=activity)
+    if provider_name == "openai":
+        return OpenAIProvider(model, activity=activity)
     return ClaudeProvider(model, activity=activity)
 
 
@@ -213,9 +237,19 @@ async def _execute(args: argparse.Namespace) -> int:
         if args.add_repair_attempts:
             saved_journal.add_repair_attempts(args.add_repair_attempts)
         saved = saved_journal.state
-        provider_name = str(saved.get("provider", "anthropic"))
-        model = str(saved["model"])
-        provider_host = str(saved.get("provider_host", "") or args.ollama_host)
+        if args.switch_model and not args.switch_provider:
+            raise RuntimeError("--switch-model requires --switch-provider")
+        if args.switch_provider:
+            provider_name = str(args.switch_provider)
+            model = _resolve_model(provider_name, args.switch_model)
+            provider_host = args.ollama_host if provider_name == "ollama" else ""
+            saved_journal.change_provider(provider_name, model, provider_host)
+            saved = saved_journal.state
+            print(f"Switching resumed run to {provider_name}/{model}.")
+        else:
+            provider_name = str(saved.get("provider", "anthropic"))
+            model = str(saved["model"])
+            provider_host = str(saved.get("provider_host", "") or args.ollama_host)
         _require_credentials(provider_name)
         provider = _make_provider(
             provider_name,

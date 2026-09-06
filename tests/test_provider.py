@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from agentic_game_dev.provider import AgentError, ClaudeProvider, OllamaProvider
+from agentic_game_dev.provider import (
+    AgentError,
+    ClaudeProvider,
+    OllamaProvider,
+    OpenAIProvider,
+)
 
 
 class FakeAPIError(Exception):
@@ -110,7 +115,83 @@ def ollama_provider_with_client(client: FakeOllamaClient) -> OllamaProvider:
     provider._client = client
     return provider
 
+
+class FakeOpenAIResponses:
+    def __init__(self, output_text: str) -> None:
+        self.output_text = output_text
+        self.kwargs: dict[str, object] = {}
+
+    async def create(self, **kwargs: object) -> object:
+        self.kwargs = kwargs
+        return SimpleNamespace(output_text=self.output_text, status="completed")
+
+
+class FakeOpenAIClient:
+    def __init__(self, responses: FakeOpenAIResponses) -> None:
+        self.responses = responses
+
+
+def openai_provider_with_responses(responses: FakeOpenAIResponses) -> OpenAIProvider:
+    provider = OpenAIProvider.__new__(OpenAIProvider)
+    provider.model = "openai-test-model"
+    provider.max_tokens = 8192
+    provider.max_retries = 0
+    provider.retry_delay = 0
+    provider.progress = lambda _message: None
+    provider.activity = None
+    provider._api_error_type = FakeAPIError
+    provider._client = FakeOpenAIClient(responses)
+    return provider
+
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_openai_text_uses_responses_api_without_storage(self) -> None:
+        responses = FakeOpenAIResponses("architecture")
+        provider = openai_provider_with_responses(responses)
+
+        result = await provider.text(role="system role", prompt="user prompt")
+
+        self.assertEqual(result, "architecture")
+        self.assertEqual(responses.kwargs["model"], "openai-test-model")
+        self.assertEqual(responses.kwargs["instructions"], "system role")
+        self.assertEqual(responses.kwargs["input"], "user prompt")
+        self.assertEqual(responses.kwargs["max_output_tokens"], 8192)
+        self.assertFalse(responses.kwargs["store"])
+
+    async def test_openai_structured_uses_strict_json_schema(self) -> None:
+        responses = FakeOpenAIResponses('{"files": [], "summary": "ok"}')
+        provider = openai_provider_with_responses(responses)
+        schema = {
+            "type": "object",
+            "properties": {
+                "files": {"type": "array"},
+                "summary": {"type": "string"},
+            },
+            "required": ["files", "summary"],
+            "additionalProperties": False,
+        }
+
+        result = await provider.structured(
+            role="role",
+            prompt="prompt",
+            tool_name="submit_patch",
+            description="Return a patch",
+            schema=schema,
+        )
+
+        self.assertEqual(result["summary"], "ok")
+        self.assertEqual(
+            responses.kwargs["text"],
+            {
+                "format": {
+                    "type": "json_schema",
+                    "name": "submit_patch",
+                    "description": "Return a patch",
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
+        )
+
     async def test_ollama_structured_uses_schema_and_network_host(self) -> None:
         client = FakeOllamaClient('{"files": [], "summary": "ok"}')
         provider = ollama_provider_with_client(client)

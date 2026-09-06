@@ -24,9 +24,11 @@ validation output as evidence and do not invent runtime results."""
 
 class RepairReviewerRole(AgentRole):
     name = "repair_reviewer"
-    instructions = """You are a meticulous senior gameplay and Python reviewer. Given the complete
-small project, authoritative specification, and validation report, return full replacements only
-for files that need fixes. Prioritize crashes, import/API mismatches, unwinnable or unclear play,
+    instructions = """You are a meticulous senior gameplay and Python reviewer. Given the
+authoritative specification, validation report, complete project context, and a specifically named
+repair target, return one complete replacement for that target file. Never decline merely because
+other diagnostics or large files exist; each affected file is handled in its own checkpoint.
+Prioritize crashes, import/API mismatches, unwinnable or unclear play,
 incorrect time-based behavior, missing state transitions, broken genre-specific rules, weak
 feedback, immediate clean exits, and exception handlers or finally blocks that mask failures.
 Preserve the architecture and declared dependency policy. Never introduce undeclared packages,

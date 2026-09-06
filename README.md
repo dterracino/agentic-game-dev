@@ -12,8 +12,8 @@ A new run proceeds through these durable stages:
 4. The complete QA contract is printed and saved as QA_ACCEPTANCE.md.
 5. You approve the contract before any implementation tokens or dependency installs are spent.
 6. One lead game developer implements files sequentially in dependency order. Every checkpoint includes the approved QA contract and the project produced so far.
-7. Static compilation and timed runtime validation run in the generated game's virtual environment.
-8. Optional implementation iterations use independent gameplay and technical reviews, then route ordered changes back through the lead developer.
+7. Static compilation, strict Pyright checking, renderer checks, and timed runtime validation run against the generated game's virtual environment.
+8. Optional implementation iterations use independent gameplay and technical reviews, then route ordered changes back through the lead developer. Each round reports its plan, updated files, and validation results.
 
 This keeps SoC in the generated project without assigning tightly coupled gameplay files to isolated parallel implementers. Independent review calls may still run concurrently.
 
@@ -53,6 +53,24 @@ The .env file is ignored by Git.
 AGENT_PROVIDER=anthropic
 ANTHROPIC_API_KEY=your-anthropic-api-key
 ANTHROPIC_MODEL=claude-sonnet-5
+~~~
+
+### OpenAI
+
+The official OpenAI Python SDK is included. OpenAI requests use the Responses API; structured
+agent results use strict JSON Schema output. Responses are sent with storage disabled.
+
+~~~dotenv
+AGENT_PROVIDER=openai
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=your-openai-model
+~~~
+
+The model is deliberately not hard-coded because availability depends on your OpenAI API project.
+Set `OPENAI_MODEL` or pass `--model` explicitly:
+
+~~~powershell
+.\.venv\Scripts\python.exe -m agentic_game_dev --provider openai --model your-openai-model --output generated_game create "A Qix clone"
 ~~~
 
 ### Ollama
@@ -141,6 +159,13 @@ Checkpoints live under generated_game/.agentic. The journal records the provider
 
 Resume uses the saved provider and model so a partially generated project cannot silently switch backends. It restores completed design, QA, implementation, refinement, and repair artifacts and calls a model only for unfinished work.
 
+To intentionally move unfinished work to another provider, use the explicit resume switch. This
+updates the run journal while preserving its specification and completed checkpoints:
+
+~~~powershell
+.\.venv\Scripts\python.exe -m agentic_game_dev --output generated_game resume --switch-provider openai --switch-model your-openai-model
+~~~
+
 If validation needs a larger repair budget:
 
 ~~~powershell
@@ -150,6 +175,10 @@ If validation needs a larger repair budget:
 ## Generated environment and dependencies
 
 Each game receives its own virtual environment and requirements.txt. The coordinator installs only validated structured dependencies after approval. Missing imports discovered during validation pause for dependency approval rather than encouraging an agent to rewrite working code around the package.
+
+The coordinator also writes `pyrightconfig.json` with strict checking enabled. Generated Python must pass Pyright with zero errors. `# type: ignore`, `# pyright: ignore`, weakened per-file modes, and disabled diagnostic rules are rejected; agents receive the actual diagnostics and must correct the annotations, narrowing, protocols, stubs, or APIs instead. Pylance reads the same project configuration when the generated folder is opened in VS Code.
+
+When validation fails across multiple files, repairs are grouped into a batch of durable per-file checkpoints. Each model call returns one complete file, after which validation is rerun for the batch. The CLI reports the affected and changed filenames. If a batch produces no source changes, the run stops instead of spending the remaining repair attempts on identical requests.
 
 Typical output:
 
@@ -162,6 +191,7 @@ generated_game/
     playtest.log
   .venv/
   QA_ACCEPTANCE.md
+  pyrightconfig.json
   requirements.txt
   game_plan.json
   shaders/
@@ -190,7 +220,7 @@ Apply playtest feedback with:
 ## Important options
 
 ~~~text
---provider anthropic|ollama
+--provider anthropic|openai|ollama
 --model MODEL
 --ollama-host URL
 --qa-policy ask|approve
@@ -210,12 +240,37 @@ technology. For example, request soft bloom, heat distortion, phosphor persisten
 damage color split without mentioning GLSL. The selected renderer profile tells the architect how
 to implement those effects.
 
+Architecture checkpoints are validated before they can be reused. They must contain concrete
+module responsibilities, rendering pipeline order, visual and audio asset manifests, cross-file
+APIs, lifecycle/cleanup, and validation strategy. ModernGL architectures must additionally include
+a shader-source manifest naming separate vertex and fragment stages. Each manifest identifies the
+technique, exact owning source file, runtime integration point, and observable validation; merely
+listing an `assets/` or `shaders/` directory is insufficient.
+
 With `--renderer moderngl`, the generated build contract must map each requested visual effect to
-its concrete GPU or simpler rendering technique, owning module, and observable validation method.
+its concrete GPU or simpler rendering technique, exact owning source file, shader source files,
+and observable validation method. Every named owner and shader must also be a planned file.
 The generated project must actually import ModernGL, create a context, and compile a vertex/fragment
 shader program; declaring the dependency alone fails validation. Shader sources can be generated as
 standalone files such as `shaders/bloom.vert`, `shaders/bloom.frag`, or a shared
 `shaders/effects.glsl`.
+If an architect names a safe project-local shader or asset owner but omits it from the files list,
+the coordinator promotes that reference to a planned file automatically. Other locally invalid
+build contracts are checkpointed with their validation error and retried with corrective context.
+
+Every plan also contains a visual-asset manifest for the promised player, enemy, world, item,
+background, UI, and feedback visuals. Because the language-model generation stage produces source
+rather than binary image files, pixel sprites and atlases are normally generated procedurally in a
+dedicated source module. That module may construct Pygame surfaces directly or deterministically
+write project-local generated sprite sheets. The audio-asset manifest works the same way: simple
+effects and ambience are synthesized as reusable mixer-ready samples or project-local WAV files
+with Python waveforms and envelopes when recorded files are unavailable. Generic placeholder
+rectangles and silent deferred audio do not satisfy those contracts.
+
+Generated Python checkpoints are rejected locally when they contain provisional TODO/placeholder
+comments or stub classes/functions whose entire implementation is `pass`, `...`, or
+`raise NotImplementedError`. On resume, an older saved plan that does not meet the current
+renderer/asset contract is re-planned and its QA contract is regenerated.
 
 Project-wide engineering rules are maintained separately from game specifications. The built-in
 policy applies separation of concerns, DRY, explicit ownership, acyclic typed APIs, testable domain

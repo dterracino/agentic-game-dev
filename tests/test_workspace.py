@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from agentic_game_dev.models import FileSpec, GamePlan, RenderEffectSpec
+from agentic_game_dev.models import (
+    AudioAssetSpec,
+    FileSpec,
+    GamePlan,
+    RenderEffectSpec,
+)
 from agentic_game_dev.workspace import GameWorkspace, WorkspaceError
 
 
@@ -23,9 +29,8 @@ class WorkspaceTests(unittest.TestCase):
                 "bad-dir!/file.py",
             )
             for name in unsafe:
-                with self.subTest(name=name):
-                    with self.assertRaises(WorkspaceError):
-                        workspace.path_for(name)
+                with self.subTest(name=name), self.assertRaises(WorkspaceError):
+                    workspace.path_for(name)
 
     def test_writes_nested_python_packages(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -72,6 +77,72 @@ class WorkspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkspaceError, "shader source is empty"):
                 workspace.write_generated_source("shaders/empty.glsl", "  \n")
 
+    def test_rejects_placeholder_generated_python(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(replace=False)
+
+            with self.assertRaisesRegex(WorkspaceError, "stub class"):
+                workspace.write_generated_source("game.py", "class Game:\n    pass\n")
+            with self.assertRaisesRegex(WorkspaceError, "provisional implementation"):
+                workspace.write_generated_source(
+                    "effects.py",
+                    "def render():\n    # Placeholder for now\n    return None\n",
+                )
+
+    def test_allows_protocol_and_overload_declarations(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(replace=False)
+
+            workspace.write_generated_source(
+                "interfaces.py",
+                "from typing import Protocol, overload\n\n"
+                "class Channel(Protocol):\n"
+                "    def set_volume(self, value: float) -> None:\n"
+                "        \"\"\"Set playback volume.\"\"\"\n"
+                "        ...\n\n"
+                "@overload\n"
+                "def convert(value: int) -> str: ...\n"
+                "@overload\n"
+                "def convert(value: str) -> int: ...\n"
+                "def convert(value: int | str) -> str | int:\n"
+                "    return str(value) if isinstance(value, int) else len(value)\n",
+            )
+
+            self.assertTrue((workspace.root / "interfaces.py").is_file())
+
+    def test_rejects_type_check_suppressions_in_generated_python(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(replace=False)
+
+            for comment in (
+                "# type: ignore",
+                "# pyright: ignore[reportAssignmentType]",
+                "# pyright: basic",
+                "# pyright: reportUnknownVariableType=false",
+            ):
+                with self.subTest(comment=comment), self.assertRaisesRegex(
+                    WorkspaceError, "prohibited type-check suppression"
+                ):
+                    workspace.write_generated_source(
+                        "game.py", f"value: int = 1  {comment}\n"
+                    )
+
+    def test_writes_strict_pyright_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(replace=False)
+
+            workspace.write_typecheck_config()
+
+            config = json.loads(
+                (workspace.root / "pyrightconfig.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(config["typeCheckingMode"], "strict")
+            self.assertNotIn("ignore", config)
+
     def test_writes_plan_and_valid_python(self) -> None:
         plan = GamePlan(
             title="Test",
@@ -89,6 +160,15 @@ class WorkspaceTests(unittest.TestCase):
                     validation="Screenshot shows a halo without obscuring text",
                 )
             ],
+            audio_assets=[
+                AudioAssetSpec(
+                    experience="Readable confirmation cue",
+                    kind="sound effect",
+                    owner="audio.py",
+                    technique="synthesized sine wave with a short decay envelope",
+                    validation="cue is audible when an action succeeds",
+                )
+            ],
         )
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")
@@ -100,6 +180,7 @@ class WorkspaceTests(unittest.TestCase):
             restored = workspace.read_plan()
             self.assertEqual(restored.rendering_strategy, plan.rendering_strategy)
             self.assertEqual(restored.render_effects, plan.render_effects)
+            self.assertEqual(restored.audio_assets, plan.audio_assets)
 
     def test_does_not_replace_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

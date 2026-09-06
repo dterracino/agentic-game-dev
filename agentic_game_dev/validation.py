@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import ast
+import io
 import os
 import re
 import subprocess
+import sys
 import time
+import tokenize
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-
 MISSING_MODULE_PATTERN = re.compile(r"No module named ['\"]([^'\"]+)['\"]")
+TYPE_SUPPRESSION_PATTERN = re.compile(
+    r"#\s*(?:type\s*:\s*ignore\b|pyright\s*:\s*(?:ignore\b|(?:basic|standard|off)\b|"
+    r"report\w+\s*=\s*(?:false|none)\b))",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,70 @@ def validate_project(root: Path) -> ValidationResult:
     if errors:
         return ValidationResult(False, "\n".join(errors))
     return ValidationResult(True, f"Static compilation passed for {len(files)} Python files")
+
+
+def validate_types(
+    root: Path,
+    python: Path,
+    *,
+    checker_python: Path | None = None,
+    timeout: float = 180.0,
+) -> ValidationResult:
+    """Run strict Pyright against generated code using the game's interpreter."""
+    suppressions: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        if ".venv" in path.relative_to(root).parts:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+            comments = (
+                token
+                for token in tokenize.generate_tokens(io.StringIO(source).readline)
+                if token.type == tokenize.COMMENT
+            )
+            for token in comments:
+                if TYPE_SUPPRESSION_PATTERN.search(token.string):
+                    relative = path.relative_to(root).as_posix()
+                    suppressions.append(f"{relative}:{token.start[0]}: {token.string.strip()}")
+        except (OSError, tokenize.TokenError) as exc:
+            return ValidationResult(False, f"Type-suppression scan failed: {exc}")
+    if suppressions:
+        return ValidationResult(
+            False,
+            "Type-check suppression comments are prohibited; fix the types instead:\n"
+            + "\n".join(suppressions),
+        )
+
+    runner = checker_python or Path(sys.executable)
+    config = root / "pyrightconfig.json"
+    command = [
+        str(runner),
+        "-m",
+        "pyright",
+        "--project",
+        str(config),
+        "--pythonpath",
+        str(python),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return ValidationResult(False, f"Pyright could not run: {exc}")
+    output = "\n".join(
+        part.strip() for part in (completed.stdout, completed.stderr) if part.strip()
+    )
+    if completed.returncode:
+        detail = output or f"Pyright exited with code {completed.returncode}"
+        return ValidationResult(False, f"Strict Pyright validation failed:\n{detail}")
+    summary = output.splitlines()[-1] if output else "no diagnostics"
+    return ValidationResult(True, f"Strict Pyright validation passed: {summary}")
 
 
 def validate_renderer_project(root: Path, renderer: str) -> ValidationResult:
@@ -146,7 +217,7 @@ def smoke_test(root: Path, python: Path, timeout: float) -> ValidationResult:
 
 
 def _append_runtime_log(path: Path, status: str, elapsed: float, output: str) -> None:
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
     with path.open("a", encoding="utf-8") as handle:
         handle.write(f"\n=== {timestamp} | {status} | {elapsed:.2f}s ===\n")
         handle.write(output.rstrip() or "(no output)")
@@ -158,7 +229,7 @@ def run_game(root: Path, python: Path) -> int:
         raise RuntimeError(f"Game interpreter is missing: {python}")
     log_path = root / ".agentic" / "playtest.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
     with log_path.open("a", encoding="utf-8") as log:
         log.write(f"\n=== Interactive run {timestamp} ===\n")
         process = subprocess.Popen(

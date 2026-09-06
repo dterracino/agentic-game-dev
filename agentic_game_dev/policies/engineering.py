@@ -25,6 +25,10 @@ DEFAULT_ENGINEERING_POLICY = EngineeringPolicy(
         "Give every module one clear responsibility; avoid monolithic game, renderer, and utility "
         "modules as well as needless abstraction layers.",
         "Keep dependency direction explicit, APIs typed and coherent, and imports acyclic.",
+        "All generated Python must pass Pyright in strict mode with zero errors. Fix typing "
+        "problems through accurate annotations, narrowing, Protocols, overloads, stubs, or "
+        "corrected APIs; never use type: ignore, pyright: ignore, weakened per-file modes, or "
+        "disabled diagnostic rules.",
         "Make deterministic domain behavior testable without opening a window or creating a GPU "
         "context.",
         "Give renderer resources, subscriptions, and other stateful objects explicit ownership "

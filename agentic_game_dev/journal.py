@@ -104,10 +104,29 @@ class RunJournal:
         self.state["qa_approved"] = True
         self._save()
 
+    def revoke_qa_contract(self) -> None:
+        self.state["qa_approved"] = False
+        self._save()
+
+    def invalidate_task(self, name: str, reason: str) -> None:
+        task = self.state.setdefault("tasks", {}).setdefault(name, {})
+        task.update({"status": "pending", "error": reason})
+        self.state["status"] = "running"
+        self.state["last_error"] = None
+        self._save()
+
     def add_repair_attempts(self, count: int) -> None:
         if count < 0:
             raise ValueError("Additional repair attempts cannot be negative")
         self.state["repair_attempts"] = int(self.state["repair_attempts"]) + count
+        self._save()
+
+    def change_provider(self, provider: str, model: str, host: str = "") -> None:
+        if not provider.strip() or not model.strip():
+            raise ValueError("Provider and model must be non-empty")
+        self.state["provider"] = provider.strip()
+        self.state["model"] = model.strip()
+        self.state["provider_host"] = host.strip()
         self._save()
 
     def start_task(self, name: str) -> None:

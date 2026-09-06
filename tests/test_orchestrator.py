@@ -7,9 +7,16 @@ import unittest
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from agentic_game_dev.journal import RunJournal
-from agentic_game_dev.models import DependencySpec, FileSpec, GamePlan
+from agentic_game_dev.models import (
+    DependencySpec,
+    FileSpec,
+    GamePlan,
+    RenderEffectSpec,
+    VisualAssetSpec,
+)
 from agentic_game_dev.orchestrator import GameBuilder
 from agentic_game_dev.validation import ValidationResult
 from agentic_game_dev.workspace import GameWorkspace, WorkspaceError
@@ -61,7 +68,7 @@ class FakeProvider:
                 "if __name__ == '__main__':\n"
                 "    main()\n"
             ),
-            "game.py": "class Game:\n    pass\n",
+            "game.py": "class Game:\n    ready = True\n",
             "shaders/glow.frag": (
                 "#version 330\n"
                 "out vec4 frag_color;\n"
@@ -81,6 +88,40 @@ class FakeProvider:
             name = "architecture"
         self.calls[name] += 1
         self.prompts.append((name, prompt))
+        if name == "architecture":
+            return """# Test Architecture
+
+## Module Responsibilities
+game.py owns game state; main.py owns startup.
+
+## Rendering Pipeline
+Draw the scene, effects, and UI in order.
+
+## Shader Source Manifest
+| Experience | Technique | Owner | Runtime integration | Validation |
+|---|---|---|---|---|
+| Scene | Vertex transform | shaders/scene.vert | renderer.py | Compiles |
+| Scene | Fragment color | shaders/scene.frag | renderer.py | Visible output |
+
+## Visual Asset Manifest
+| Experience | Technique | Owner | Runtime integration | Validation |
+|---|---|---|---|---|
+| Player | Procedural surface | game.py | Scene draw | Visible sprite |
+
+## Audio Asset Manifest
+| Experience | Technique | Owner | Runtime integration | Validation |
+|---|---|---|---|---|
+| Feedback | Synthesized tone | game.py | Game event | Audible cue |
+
+## Cross-File APIs
+Game is imported by main.
+
+## Lifecycle and Cleanup
+Resources are released on shutdown.
+
+## Validation Strategy
+Compile, test, and smoke-test the game.
+"""
         return f"A focused {name} proposal."
 
     async def structured(
@@ -189,6 +230,41 @@ class FakeProvider:
         raise AssertionError(f"Unexpected tool: {tool_name}")
 
 
+class FileRepairProvider(FakeProvider):
+    def __init__(self, *, no_change: bool = False) -> None:
+        super().__init__()
+        self.no_change = no_change
+
+    async def structured(
+        self,
+        *,
+        role: str,
+        prompt: str,
+        tool_name: str,
+        description: str,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        marker = "Your sole repair target is "
+        if tool_name != "submit_replacements" or marker not in prompt:
+            return await super().structured(
+                role=role,
+                prompt=prompt,
+                tool_name=tool_name,
+                description=description,
+                schema=schema,
+            )
+        self.calls[tool_name] += 1
+        self.prompts.append((tool_name, prompt))
+        filename = prompt.split(marker, 1)[1].split(". Return", 1)[0]
+        content = self.files[filename]
+        if not self.no_change:
+            content = content.rstrip() + "\nrepaired: bool = True\n"
+        return {
+            "files": [{"filename": filename, "content": content}],
+            "summary": f"Repaired {filename}",
+        }
+
+
 def make_builder(
     provider: FakeProvider,
     workspace: GameWorkspace,
@@ -204,11 +280,258 @@ def make_builder(
         progress=messages.append,
         repair_attempts=0,
         smoke_timeout=0.05,
+        type_checker=lambda _root, _python: ValidationResult(
+            True, "Strict Pyright validation passed: 0 errors"
+        ),
         **kwargs,
     )
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_completed_file_repair_is_regenerated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(False)
+            provider = FileRepairProvider()
+            provider.files["audio.py"] = (
+                "def set_volume(value: float) -> float:\n    return value\n"
+            )
+            plan = GamePlan(
+                title="Audio repair",
+                pitch="Replace a poisoned checkpoint",
+                core_loop=["a", "b", "c"],
+                controls=[],
+                quality_bar=["a", "b", "c", "d"],
+                files=[FileSpec("audio.py", "audio"), FileSpec("main.py", "entry")],
+            )
+            workspace.write_plan(plan)
+            workspace.write_generated_source("audio.py", provider.files["audio.py"])
+            workspace.write_generated_source("main.py", provider.files["main.py"])
+            builder = GameBuilder(
+                provider,
+                workspace,
+                environment=FakeEnvironment(),
+                progress=lambda _message: None,
+            )
+            builder.journal = RunJournal.create(
+                workspace.root,
+                brief="test",
+                model="test-model",
+                renderer="pygame",
+                repair_attempts=1,
+                smoke_timeout=8,
+            )
+            invalid_patch = {
+                "files": [
+                    {
+                        "filename": "audio.py",
+                        "content": "def set_volume(value: float) -> float:\n    pass\n",
+                    }
+                ],
+                "summary": "Incomplete repair",
+            }
+            artifact = builder.journal.write_json_artifact(
+                "repairs/001/audio.py.json", invalid_patch
+            )
+            task_name = "repair_file:001:audio.py"
+            builder.journal.complete_task(task_name, artifact)
+
+            patch_result = await builder._review_file_checkpoint(
+                attempt=1,
+                filename="audio.py",
+                validation_report="audio.py:1: error: test",
+                allowed_names={"audio.py", "main.py"},
+            )
+
+            self.assertEqual(provider.calls["submit_replacements"], 1)
+            self.assertIn("repaired: bool = True", patch_result["files"][0]["content"])
+            state = RunJournal.load(workspace.root).state
+            self.assertEqual(state["tasks"][task_name]["status"], "complete")
+            saved = builder.journal.read_json_artifact(
+                state["tasks"][task_name]["artifact"]
+            )
+            self.assertIn("repaired: bool = True", saved["files"][0]["content"])
+
+    async def test_completed_validation_skips_invalid_legacy_repair_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(False)
+            plan = GamePlan(
+                title="Resume test",
+                pitch="Reuse validation",
+                core_loop=["a", "b", "c"],
+                controls=[],
+                quality_bar=["a", "b", "c", "d"],
+                files=[FileSpec("game.py", "game"), FileSpec("main.py", "entry")],
+            )
+            workspace.write_plan(plan)
+            workspace.write_generated_source("game.py", "ready: bool = True\n")
+            workspace.write_generated_source("main.py", "def main() -> None:\n    return None\n")
+            builder = GameBuilder(
+                FakeProvider(),
+                workspace,
+                environment=FakeEnvironment(),
+                repair_attempts=1,
+                progress=lambda _message: None,
+            )
+            builder.journal = RunJournal.create(
+                workspace.root,
+                brief="test",
+                model="test-model",
+                renderer="pygame",
+                repair_attempts=1,
+                smoke_timeout=8,
+            )
+            invalid_patch = {
+                "files": [
+                    {
+                        "filename": "new_module.py",
+                        "content": "value: int = 1\n",
+                    }
+                ],
+                "summary": "Invalid stale repair",
+            }
+            artifact = builder.journal.write_json_artifact(
+                "repairs/1.json", invalid_patch
+            )
+            builder.journal.complete_task("repair:1", artifact)
+            builder.journal.complete_task("validation")
+
+            with patch.object(builder, "_run_validation") as validation:
+                result = await builder._validate_and_repair(plan)
+
+            self.assertTrue(result.ok, result.report)
+            validation.assert_not_called()
+            self.assertFalse((workspace.root / "new_module.py").exists())
+            state = RunJournal.load(workspace.root).state
+            self.assertEqual(state["tasks"]["repair:1"]["status"], "pending")
+
+    async def test_repairs_validation_failures_one_file_per_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(False)
+            provider = FileRepairProvider()
+            provider.files.update(
+                {
+                    "a.py": "value: str = 'a'\n",
+                    "b.py": "value: str = 'b'\n",
+                }
+            )
+            plan = GamePlan(
+                title="Repair test",
+                pitch="Repair files individually",
+                core_loop=["a", "b", "c"],
+                controls=[],
+                quality_bar=["a", "b", "c", "d"],
+                files=[
+                    FileSpec("a.py", "first"),
+                    FileSpec("b.py", "second"),
+                    FileSpec("main.py", "entry"),
+                ],
+            )
+            workspace.write_plan(plan)
+            for filename in ("a.py", "b.py", "main.py"):
+                workspace.write_generated_source(filename, provider.files[filename])
+            builder = GameBuilder(
+                provider,
+                workspace,
+                environment=FakeEnvironment(),
+                repair_attempts=1,
+                progress=lambda _message: None,
+            )
+            builder.journal = RunJournal.create(
+                workspace.root,
+                brief="test",
+                model="test-model",
+                renderer="pygame",
+                repair_attempts=1,
+                smoke_timeout=8,
+            )
+            failed = ValidationResult(
+                False,
+                f"{workspace.root / 'a.py'}:1:1 - error: bad a\n"
+                f"{workspace.root / 'b.py'}:1:1 - error: bad b",
+            )
+            with patch.object(
+                builder,
+                "_run_validation",
+                side_effect=[failed, ValidationResult(True, "passed")],
+            ):
+                result = await builder._validate_and_repair(plan)
+
+            self.assertTrue(result.ok, result.report)
+            self.assertEqual(provider.calls["submit_replacements"], 2)
+            self.assertIn("repaired: bool = True", (workspace.root / "a.py").read_text())
+            self.assertIn("repaired: bool = True", (workspace.root / "b.py").read_text())
+            tasks = RunJournal.load(workspace.root).state["tasks"]
+            self.assertEqual(tasks["repair_file:001:a.py"]["status"], "complete")
+            self.assertEqual(tasks["repair_file:001:b.py"]["status"], "complete")
+
+    async def test_repair_stops_when_file_checkpoints_make_no_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = GameWorkspace(Path(temp) / "game")
+            workspace.prepare(False)
+            provider = FileRepairProvider(no_change=True)
+            plan = GamePlan(
+                title="Repair test",
+                pitch="Stop stalled repairs",
+                core_loop=["a", "b", "c"],
+                controls=[],
+                quality_bar=["a", "b", "c", "d"],
+                files=[FileSpec("game.py", "game"), FileSpec("main.py", "entry")],
+            )
+            workspace.write_plan(plan)
+            workspace.write_generated_source("game.py", provider.files["game.py"])
+            workspace.write_generated_source("main.py", provider.files["main.py"])
+            builder = GameBuilder(
+                provider,
+                workspace,
+                environment=FakeEnvironment(),
+                repair_attempts=3,
+                progress=lambda _message: None,
+            )
+            builder.journal = RunJournal.create(
+                workspace.root,
+                brief="test",
+                model="test-model",
+                renderer="pygame",
+                repair_attempts=3,
+                smoke_timeout=8,
+            )
+            failed = ValidationResult(False, "game.py:1:1 - error: still broken")
+            with patch.object(builder, "_run_validation", return_value=failed):
+                result = await builder._validate_and_repair(plan)
+
+            self.assertFalse(result.ok)
+            self.assertIn("remaining repair passes were not spent", result.report)
+            self.assertEqual(provider.calls["submit_replacements"], 1)
+    def test_moderngl_architecture_rejects_folder_only_asset_plan(self) -> None:
+        builder = object.__new__(GameBuilder)
+        builder.renderer = "moderngl"
+        architecture = """# Architecture
+
+## Module Responsibilities
+renderer.py renders.
+
+## Rendering Pipeline
+Draw the scene.
+
+## Cross-File APIs
+Renderer is called by main.
+
+## Lifecycle and Cleanup
+Release the context.
+
+## Validation Strategy
+Smoke test.
+
+assets/ contains assets not included in the spec.
+shaders/ contains shaders.
+"""
+
+        with self.assertRaisesRegex(ValueError, "missing required architecture sections"):
+            builder._validate_architecture(architecture)
+
     async def test_specification_is_snapshotted_and_propagated(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = GameWorkspace(Path(temp) / "game")
@@ -237,7 +560,10 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             ]
             self.assertTrue(implementation_prompts)
             self.assertTrue(
-                all("Inventory has no capacity limit" in prompt for prompt in implementation_prompts)
+                all(
+                    "Inventory has no capacity limit" in prompt
+                    for prompt in implementation_prompts
+                )
             )
 
     def test_normalize_plan_preserves_inferred_ui_toolkit_dependency(self) -> None:
@@ -275,6 +601,51 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNotNone(normalized.dependency_for_import("pygame_gui"))
             self.assertEqual([item.name for item in normalized.files], ["game.py", "main.py"])
+
+    def test_normalize_plan_promotes_referenced_shader_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            builder = GameBuilder(
+                FakeProvider(),
+                GameWorkspace(Path(temp) / "game"),
+                environment=FakeEnvironment(),
+                renderer="moderngl",
+            )
+            plan = GamePlan(
+                title="Shader game",
+                pitch="A GPU-rendered game.",
+                core_loop=["move", "claim", "escape"],
+                controls=["Arrows"],
+                quality_bar=["clear", "responsive", "coherent", "complete"],
+                files=[
+                    FileSpec("renderer.py", "ModernGL renderer"),
+                    FileSpec("main.py", "Entry point"),
+                ],
+                render_effects=[
+                    RenderEffectSpec(
+                        experience="Claim sweep",
+                        technique="vertex and fragment shader pass",
+                        owner="renderer.py",
+                        validation="Sweep is visible after claiming a tile",
+                        source_files=[
+                            "shaders/claim_sweep.vert",
+                            "shaders/claim_sweep.frag",
+                        ],
+                    )
+                ],
+            )
+
+            normalized = builder._normalize_plan(plan)
+
+            self.assertEqual(
+                [item.name for item in normalized.files],
+                [
+                    "renderer.py",
+                    "shaders/claim_sweep.vert",
+                    "shaders/claim_sweep.frag",
+                    "main.py",
+                ],
+            )
+            builder._validate_plan(normalized)
 
     async def test_completed_plan_is_normalized_when_resumed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -387,6 +758,9 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
                 repair_attempts=0,
                 smoke_timeout=0.05,
                 progress=lambda _message: None,
+                type_checker=lambda _root, _python: ValidationResult(
+                    True, "Strict Pyright validation passed: 0 errors"
+                ),
             ).resume()
 
             self.assertTrue(resumed.ok, resumed.report)
@@ -555,6 +929,12 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 state["tasks"]["iteration:001:validation"]["status"], "complete"
             )
+            self.assertTrue(
+                any("Planned file updates (1): game.py" in item for item in messages)
+            )
+            self.assertTrue(
+                any("Implementation round 1 complete" in item for item in messages)
+            )
 
     async def test_resume_replays_iteration_without_repeating_paid_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -658,12 +1038,17 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             workspace.write_plan(plan)
             artifact = builder.journal.write_json_artifact("planning/plan.json", plan.as_dict())
             builder.journal.complete_task("plan", artifact)
-            builder._run_validation = lambda: ValidationResult(True, "passed")  # type: ignore[method-assign]
-
-            result = builder._handle_missing_dependency(
-                plan,
-                ValidationResult(False, "ModuleNotFoundError: No module named 'pygame_gui'"),
-            )
+            with patch.object(
+                builder,
+                "_run_validation",
+                return_value=ValidationResult(True, "passed"),
+            ):
+                result = builder._handle_missing_dependency(
+                    plan,
+                    ValidationResult(
+                        False, "ModuleNotFoundError: No module named 'pygame_gui'"
+                    ),
+                )
 
             self.assertTrue(result.ok)
             self.assertIn("pygame-gui", approved)
@@ -689,7 +1074,131 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
             files=files,
         )
 
-        GameBuilder._validate_plan(plan)
+        builder = object.__new__(GameBuilder)
+        builder.renderer = "pygame"
+        builder._validate_plan(plan)
+
+    def test_plan_rejects_unplanned_effect_and_asset_owners(self) -> None:
+        plan = GamePlan(
+            title="Broken contracts",
+            pitch="Missing owners",
+            core_loop=["a", "b", "c"],
+            controls=[],
+            quality_bar=["a", "b", "c", "d"],
+            files=[FileSpec("game.py", "game"), FileSpec("main.py", "entry")],
+            render_effects=[
+                RenderEffectSpec(
+                    "Glow",
+                    "layered surfaces",
+                    "render/effects.py",
+                    "glow is visible",
+                )
+            ],
+            visual_assets=[
+                VisualAssetSpec(
+                    "Player sprite",
+                    "sprite",
+                    "assets/sprites.py",
+                    "procedural pixel atlas",
+                    "player has a distinct silhouette",
+                )
+            ],
+        )
+        builder = object.__new__(GameBuilder)
+        builder.renderer = "pygame"
+
+        with self.assertRaisesRegex(ValueError, "owner is not a planned file"):
+            builder._validate_plan(plan)
+
+    def test_moderngl_plan_requires_referenced_vertex_and_fragment_sources(self) -> None:
+        plan = GamePlan(
+            title="GPU game",
+            pitch="Rendered with shaders",
+            core_loop=["a", "b", "c"],
+            controls=[],
+            quality_bar=["a", "b", "c", "d"],
+            files=[
+                FileSpec("renderer.py", "ModernGL renderer"),
+                FileSpec("main.py", "entry"),
+            ],
+            render_effects=[],
+        )
+        builder = object.__new__(GameBuilder)
+        builder.renderer = "moderngl"
+
+        with self.assertRaisesRegex(ValueError, "separate planned vertex and fragment"):
+            builder._validate_plan(plan)
+
+        plan.files[1:1] = [
+            FileSpec("shaders/scene.vert", "Vertex transform"),
+            FileSpec("shaders/scene.frag", "Pixel treatment"),
+        ]
+        plan.render_effects.append(
+            RenderEffectSpec(
+                "Rendered scene",
+                "vertex and fragment shader pass",
+                "renderer.py",
+                "scene is visibly rendered",
+                ["shaders/scene.vert", "shaders/scene.frag"],
+            )
+        )
+        builder._validate_plan(plan)
+
+    def test_plan_accepts_multiple_planned_effect_owners(self) -> None:
+        plan = GamePlan(
+            title="GPU game",
+            pitch="Rendered with shaders",
+            core_loop=["move", "claim", "escape"],
+            controls=["Arrows"],
+            quality_bar=["clear", "responsive", "coherent", "complete"],
+            files=[
+                FileSpec("pixel_vault/presentation.py", "presentation"),
+                FileSpec("pixel_vault/scene_layout.py", "scene layout"),
+                FileSpec("main.py", "entry"),
+            ],
+            render_effects=[
+                RenderEffectSpec(
+                    "Layered scene",
+                    "surface composition",
+                    "pixel_vault/presentation.py and pixel_vault/scene_layout.py",
+                    "layers are visible",
+                )
+            ],
+        )
+        builder = object.__new__(GameBuilder)
+        builder.renderer = "pygame"
+
+        builder._validate_plan(plan)
+
+    def test_plan_accepts_comma_separated_effect_owners_with_final_and(self) -> None:
+        plan = GamePlan(
+            title="GPU game",
+            pitch="Rendered with shaders",
+            core_loop=["move", "claim", "escape"],
+            controls=["Arrows"],
+            quality_bar=["clear", "responsive", "coherent", "complete"],
+            files=[
+                FileSpec("pixel_vault/presentation.py", "presentation"),
+                FileSpec("pixel_vault/ui_layout.py", "UI layout"),
+                FileSpec("pixel_vault/renderer.py", "renderer"),
+                FileSpec("main.py", "entry"),
+            ],
+            render_effects=[
+                RenderEffectSpec(
+                    "Layered UI",
+                    "layout and compositing",
+                    (
+                        "pixel_vault/presentation.py, pixel_vault/ui_layout.py, "
+                        "and pixel_vault/renderer.py"
+                    ),
+                    "UI layers are visible",
+                )
+            ],
+        )
+        builder = object.__new__(GameBuilder)
+        builder.renderer = "pygame"
+
+        builder._validate_plan(plan)
 
 if __name__ == "__main__":
     unittest.main()

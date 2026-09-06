@@ -6,6 +6,7 @@ from unittest.mock import patch
 from agentic_game_dev.cli import (
     _load_environment,
     _read_specification,
+    _require_credentials,
     _resolve_model,
     build_parser,
 )
@@ -77,10 +78,52 @@ class CliEnvironmentTests(unittest.TestCase):
         ):
             _resolve_model("ollama", None)
 
+    def test_openai_options_model_and_credentials(self) -> None:
+        args = build_parser().parse_args(
+            ["--provider", "openai", "--model", "api-model", "create", "A game"]
+        )
+        self.assertEqual(args.provider, "openai")
+        self.assertEqual(_resolve_model(args.provider, args.model), "api-model")
+
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_MODEL": "environment-model",
+                "OPENAI_API_KEY": "test-key",
+            },
+            clear=True,
+        ):
+            self.assertEqual(_resolve_model("openai", None), "environment-model")
+            _require_credentials("openai")
+
+    def test_openai_requires_model_and_api_key(self) -> None:
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            self.assertRaisesRegex(RuntimeError, "OPENAI_MODEL"),
+        ):
+            _resolve_model("openai", None)
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            self.assertRaisesRegex(RuntimeError, "OPENAI_API_KEY"),
+        ):
+            _require_credentials("openai")
+
     def test_resume_parses_additional_repair_budget(self) -> None:
-        args = build_parser().parse_args(["resume", "--add-repair-attempts", "2"])
+        args = build_parser().parse_args(
+            [
+                "resume",
+                "--add-repair-attempts",
+                "2",
+                "--switch-provider",
+                "openai",
+                "--switch-model",
+                "api-model",
+            ]
+        )
 
         self.assertEqual(args.add_repair_attempts, 2)
+        self.assertEqual(args.switch_provider, "openai")
+        self.assertEqual(args.switch_model, "api-model")
 
     def test_run_command_parses_without_iteration_options(self) -> None:
         args = build_parser().parse_args(["--output", "game", "run"])

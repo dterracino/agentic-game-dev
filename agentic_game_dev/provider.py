@@ -172,6 +172,141 @@ class ClaudeProvider:
             yield
 
 
+class OpenAIProvider:
+    """Adapter for OpenAI's Responses API."""
+
+    provider_name = "openai"
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        max_tokens: int = 32768,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        progress: Callable[[str], None] = print,
+        activity: TerminalActivity | None = None,
+    ) -> None:
+        try:
+            from openai import APIError, AsyncOpenAI
+        except ImportError as exc:
+            raise AgentError(
+                "The OpenAI SDK is not installed. Run: python -m pip install -e ."
+            ) from exc
+        self.model = model
+        self.max_tokens = max_tokens
+        self.max_retries = max(0, max_retries)
+        self.retry_delay = max(0.0, retry_delay)
+        self.progress = progress
+        self.activity = activity
+        self._api_error_type = APIError
+        self._client = AsyncOpenAI(max_retries=0)
+
+    async def _create_response(self, **kwargs: Any) -> Any:
+        async with self._activity("Waiting for OpenAI"):
+            for attempt in range(self.max_retries + 1):
+                try:
+                    return await self._client.responses.create(**kwargs)
+                except self._api_error_type as exc:
+                    if self._is_transient(exc) and attempt < self.max_retries:
+                        delay = self.retry_delay * (2**attempt)
+                        self.progress(
+                            f"  OpenAI is temporarily unavailable; retrying in {delay:g}s "
+                            f"({attempt + 1}/{self.max_retries})..."
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    self._raise_api_error(exc)
+        raise AgentError("OpenAI request exhausted its retry budget")
+
+    async def text(self, *, role: str, prompt: str) -> str:
+        response = await self._create_response(
+            model=self.model,
+            instructions=role,
+            input=prompt,
+            max_output_tokens=self.max_tokens,
+            store=False,
+        )
+        text = str(getattr(response, "output_text", "") or "").strip()
+        if not text:
+            raise AgentError(self._empty_response_message(response, "text"))
+        return text
+
+    async def structured(
+        self,
+        *,
+        role: str,
+        prompt: str,
+        tool_name: str,
+        description: str,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = await self._create_response(
+            model=self.model,
+            instructions=role,
+            input=prompt,
+            max_output_tokens=self.max_tokens,
+            store=False,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": tool_name,
+                    "description": description,
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
+        )
+        content = str(getattr(response, "output_text", "") or "").strip()
+        if not content:
+            raise AgentError(self._empty_response_message(response, tool_name))
+        try:
+            value = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise AgentError(
+                f"OpenAI returned invalid JSON for {tool_name}: {exc}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise AgentError(f"OpenAI returned a non-object response for {tool_name}")
+        return value
+
+    def _raise_api_error(self, exc: BaseException) -> None:
+        status = getattr(exc, "status_code", None)
+        if status == 404:
+            raise AgentError(
+                f"OpenAI could not find model {self.model!r}. Set OPENAI_MODEL in .env "
+                "to a model available to your API project, or pass --model."
+            ) from exc
+        detail = getattr(exc, "message", None) or str(exc)
+        status_text = f" ({status})" if status is not None else ""
+        raise AgentError(f"OpenAI API request failed{status_text}: {detail}") from exc
+
+    @staticmethod
+    def _is_transient(exc: BaseException) -> bool:
+        status = getattr(exc, "status_code", None)
+        detail = str(getattr(exc, "message", None) or exc).lower()
+        return status in {408, 409, 429, 500, 502, 503, 504} or any(
+            marker in detail
+            for marker in ("connection", "temporarily unavailable", "timeout")
+        )
+
+    @staticmethod
+    def _empty_response_message(response: Any, expected: str) -> str:
+        status = str(getattr(response, "status", "unknown"))
+        incomplete = getattr(response, "incomplete_details", None)
+        reason = getattr(incomplete, "reason", None)
+        suffix = f", reason={reason}" if reason else ""
+        return f"OpenAI did not produce {expected} (status={status}{suffix})"
+
+    @asynccontextmanager
+    async def _activity(self, label: str) -> AsyncIterator[None]:
+        if self.activity is None:
+            yield
+            return
+        async with self.activity.track(label):
+            yield
+
+
 class OllamaProvider:
     """Provider adapter for an Ollama server on this machine or the local network."""
 

@@ -22,7 +22,18 @@ otherwise turn failures into successful exits. Never propose shell commands, net
 dynamic code execution, or file access outside the game directory. Keep the architecture concise
 and do not include speculative file implementations. In the build contract, state the overall
 rendering strategy and map every requested visual effect to its player-facing intent, concrete
-technique, owning module, and observable validation evidence."""
+technique, exact owning source filename, shader source filenames where applicable, and observable
+validation evidence. Every shader source named by an effect must also appear in the planned files.
+For ModernGL, plan separate vertex and fragment stage files using .vert/.frag or clearly named
+.glsl files. Also provide a visual-asset manifest covering every visible player, enemy, world,
+item, background, and UI element promised by the design. Each asset must name its kind, concrete
+generation or drawing technique, exact owning planned source file, and observable validation.
+Procedural sprites and sprite atlases belong in a dedicated asset-generation/presentation module
+that either builds
+Pygame surfaces directly or writes deterministic project-local generated assets; a placeholder
+rectangle is not an asset plan. Provide the same manifest for required sound effects and ambience.
+Prefer a dedicated audio module that synthesizes reusable mixer-ready samples or deterministic
+project-local WAV files with Python waveforms and envelopes when recorded files are unavailable."""
 
 
 class IterationArchitectRole(AgentRole):

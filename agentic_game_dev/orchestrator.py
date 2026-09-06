@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
+import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -26,6 +28,7 @@ from .validation import (
     smoke_test,
     validate_project,
     validate_renderer_project,
+    validate_types,
 )
 from .workspace import GameWorkspace, WorkspaceError
 
@@ -89,8 +92,62 @@ PLAN_SCHEMA: dict[str, Any] = {
                     "technique": {"type": "string", "minLength": 1},
                     "owner": {"type": "string", "minLength": 1},
                     "validation": {"type": "string", "minLength": 1},
+                    "source_files": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
                 },
-                "required": ["experience", "technique", "owner", "validation"],
+                "required": [
+                    "experience",
+                    "technique",
+                    "owner",
+                    "validation",
+                    "source_files",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "visual_assets": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "experience": {"type": "string", "minLength": 1},
+                    "kind": {"type": "string", "minLength": 1},
+                    "owner": {"type": "string", "minLength": 1},
+                    "technique": {"type": "string", "minLength": 1},
+                    "validation": {"type": "string", "minLength": 1},
+                },
+                "required": [
+                    "experience",
+                    "kind",
+                    "owner",
+                    "technique",
+                    "validation",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "audio_assets": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "experience": {"type": "string", "minLength": 1},
+                    "kind": {"type": "string", "minLength": 1},
+                    "owner": {"type": "string", "minLength": 1},
+                    "technique": {"type": "string", "minLength": 1},
+                    "validation": {"type": "string", "minLength": 1},
+                },
+                "required": [
+                    "experience",
+                    "kind",
+                    "owner",
+                    "technique",
+                    "validation",
+                ],
                 "additionalProperties": False,
             },
         },
@@ -103,7 +160,10 @@ PLAN_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "name": {
                         "type": "string",
-                        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\\.(?:py|vert|frag|glsl)$",
+                        "pattern": (
+                            "^(?:[A-Za-z_][A-Za-z0-9_]*/)*"
+                            "[A-Za-z_][A-Za-z0-9_]*\\.(?:py|vert|frag|glsl)$"
+                        ),
                     },
                     "purpose": {"type": "string"},
                     "public_api": {"type": "array", "items": {"type": "string"}},
@@ -121,6 +181,8 @@ PLAN_SCHEMA: dict[str, Any] = {
         "quality_bar",
         "rendering_strategy",
         "render_effects",
+        "visual_assets",
+        "audio_assets",
         "dependencies",
         "files",
     ],
@@ -180,7 +242,10 @@ ITERATION_PLAN_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "filename": {
                         "type": "string",
-                        "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\\.(?:py|vert|frag|glsl)$",
+                        "pattern": (
+                            "^(?:[A-Za-z_][A-Za-z0-9_]*/)*"
+                            "[A-Za-z_][A-Za-z0-9_]*\\.(?:py|vert|frag|glsl)$"
+                        ),
                     },
                     "reason": {"type": "string"},
                 },
@@ -217,6 +282,8 @@ PATCH_SCHEMA: dict[str, Any] = {
 }
 
 FILE_GENERATION_ATTEMPTS = 3
+PLAN_GENERATION_ATTEMPTS = 3
+ARCHITECTURE_GENERATION_ATTEMPTS = 2
 
 KNOWN_DEPENDENCY_CONSTRAINTS: dict[str, tuple[str, str]] = {
     "pygame_gui": ("pygame-gui", ">=0.6,<0.7"),
@@ -241,6 +308,7 @@ class GameBuilder:
         dependency_approver: DependencyApprover | None = None,
         qa_approver: QAApprover | None = None,
         progress: Callable[[str], None] = print,
+        type_checker: Callable[[Path, Path], ValidationResult] | None = None,
     ) -> None:
         self.provider = provider
         self.workspace = workspace
@@ -253,6 +321,7 @@ class GameBuilder:
         self.environment = environment or GameEnvironment(workspace.root, progress=progress)
         self.dependency_approver = dependency_approver or (lambda _deps, _reason: False)
         self.qa_approver = qa_approver or (lambda _contract, _path: True)
+        self.type_checker = type_checker or validate_types
         self.journal: RunJournal | None = None
 
     async def create(
@@ -332,16 +401,7 @@ class GameBuilder:
 
         journal.set_stage("plan")
         self.progress("[2/7] Architect is producing the dependency-aware build contract...")
-        architecture = await self._text_checkpoint(
-            "architecture",
-            "planning/architecture.txt",
-            role=self._technical_role(ArchitectRole),
-            prompt=(
-                f"{self._specification_context()}"
-                f"Explore a robust architecture for this brief:\n{brief}\n\n"
-                f"Final iterated design:\n{design}\n\nRequested renderer: {self.renderer}"
-            ),
-        )
+        architecture = await self._architecture_checkpoint(brief, design)
         plan = await self._plan_checkpoint(brief, design, architecture)
         self.workspace.write_plan(plan)
 
@@ -581,6 +641,7 @@ class GameBuilder:
         if failures:
             raise failures[0]
         gameplay_review, technical_review = (str(item) for item in reviews)
+        self.progress("    Reviews complete: gameplay and technical findings captured.")
 
         plan, changes, summary = await self._iteration_plan_checkpoint(
             round_number, brief, current_plan, gameplay_review, technical_review
@@ -593,6 +654,14 @@ class GameBuilder:
         )
         if summary:
             self.progress(f"    Improvement plan: {summary}")
+        changed_names = [spec.name for spec, _reason in changes]
+        if changed_names:
+            self.progress(
+                f"    Planned file updates ({len(changed_names)}): "
+                + ", ".join(changed_names)
+            )
+        else:
+            self.progress("    Planned file updates: none")
 
         pending = [
             (spec, reason)
@@ -624,6 +693,11 @@ class GameBuilder:
         )
         if not result.ok:
             self._journal().fail_task(f"{prefix}:validation", result.report)
+            self.progress(f"    Implementation round {round_number} validation failed.")
+        else:
+            self.progress(f"    Implementation round {round_number} complete.")
+            for line in result.report.splitlines():
+                self.progress(f"      {line}")
         return plan, result
 
     async def _iteration_plan_checkpoint(
@@ -811,6 +885,198 @@ class GameBuilder:
             journal.fail_task(task_name, exc)
             raise
 
+    async def _architecture_checkpoint(self, brief: str, design: str) -> str:
+        journal = self._journal()
+        task_name = "architecture"
+        artifact = journal.task_artifact(task_name)
+        if journal.task_complete(task_name) and artifact:
+            architecture = journal.read_text_artifact(artifact)
+            try:
+                self._validate_architecture(architecture)
+            except ValueError as exc:
+                self.progress(
+                    "  Saved architecture does not meet the current shader/asset "
+                    f"contract; regenerating it: {exc}"
+                )
+                journal.invalidate_task("architecture", str(exc))
+                journal.invalidate_task(
+                    "plan", "Architecture changed and requires a new build plan"
+                )
+                journal.invalidate_task(
+                    "qa_contract",
+                    "Architecture changed and requires a new QA acceptance contract",
+                )
+                journal.revoke_qa_contract()
+            else:
+                self.progress("  Reusing checkpoint: architecture")
+                return architecture
+
+        recovered = self._recover_architecture_attempt()
+        if recovered is not None:
+            journal.invalidate_task(
+                "plan", "Recovered architecture requires a matching build plan"
+            )
+            journal.invalidate_task(
+                "qa_contract",
+                "Recovered architecture requires a matching QA acceptance contract",
+            )
+            journal.revoke_qa_contract()
+            artifact = journal.write_text_artifact(
+                "planning/architecture.txt", recovered
+            )
+            journal.complete_task(task_name, artifact)
+            self.progress(
+                "  Recovered the newest valid saved architecture attempt; "
+                "no model call needed."
+            )
+            return recovered
+
+        prompt = (
+            f"{self._specification_context()}"
+            f"Explore a robust architecture for this brief:\n{brief}\n\n"
+            f"Final iterated design:\n{design}\n\nRequested renderer: {self.renderer}\n\n"
+            "Return a complete Markdown architecture document using these exact level-two "
+            "headings: Module Responsibilities, Rendering Pipeline, Visual Asset Manifest, "
+            "Audio Asset Manifest, Cross-File APIs, Lifecycle and Cleanup, and Validation "
+            "Strategy. For ModernGL also include Shader Source Manifest. Each manifest must "
+            "enumerate concrete player-facing assets/effects rather than merely naming a folder. "
+            "Use tables that name the experience, technique, exact owning source file, runtime "
+            "integration point, and observable validation. The shader manifest must list separate "
+            "vertex and fragment stage filenames and map every shader-driven effect to them. The "
+            "visual manifest must cover player animation states, hazards, level/world pieces, "
+            "items, backgrounds, UI, and feedback promised by the design, whether generated by "
+            "script, built as Pygame surfaces, or drawn inline. The audio manifest must cover "
+            "required interaction, movement, hazard, success/failure, and ambience cues and state "
+            "whether each is synthesized or loaded."
+        )
+        retry_context = ""
+        journal.start_task(task_name)
+        try:
+            for attempt in range(1, ARCHITECTURE_GENERATION_ATTEMPTS + 1):
+                response = await self.provider.text(
+                    role=self._technical_role(ArchitectRole),
+                    prompt=prompt + retry_context,
+                )
+                try:
+                    self._validate_architecture(response)
+                except ValueError as exc:
+                    journal.write_text_artifact(
+                        f"planning/architecture.failed_{attempt:02d}.txt",
+                        f"{response}\n\nValidation error: {exc}",
+                    )
+                    if attempt >= ARCHITECTURE_GENERATION_ATTEMPTS:
+                        raise
+                    self.progress(
+                        f"  Architecture failed local validation: {exc}. "
+                        f"Retrying ({attempt + 1}/{ARCHITECTURE_GENERATION_ATTEMPTS})..."
+                    )
+                    retry_context = (
+                        "\n\nYour previous architecture document failed local validation.\n"
+                        f"Validation error: {exc}\n"
+                        "Return a corrected, complete replacement using every required heading "
+                        "and concrete source-file ownership in all manifests."
+                    )
+                    continue
+                artifact = journal.write_text_artifact(
+                    "planning/architecture.txt", response
+                )
+                journal.complete_task(task_name, artifact)
+                return response
+        except BaseException as exc:
+            journal.fail_task(task_name, exc)
+            raise
+        raise WorkspaceError("Architecture generation exhausted validation attempts")
+
+    def _validate_architecture(self, architecture: str) -> None:
+        required_sections = [
+            "Module Responsibilities",
+            "Rendering Pipeline",
+            "Visual Asset Manifest",
+            "Audio Asset Manifest",
+            "Cross-File APIs",
+            "Lifecycle and Cleanup",
+            "Validation Strategy",
+        ]
+        if self.renderer == "moderngl":
+            required_sections.append("Shader Source Manifest")
+        missing = [
+            heading
+            for heading in required_sections
+            if not re.search(
+                rf"(?im)^#{{2,4}}[ \t]+{re.escape(heading)}[ \t]*:?[ \t]*$",
+                architecture,
+            )
+        ]
+        if missing:
+            raise ValueError(
+                "missing required architecture sections: " + ", ".join(missing)
+            )
+        if re.search(r"(?i)assets?\s+.*not included", architecture):
+            raise ValueError("asset responsibilities cannot be deferred as not included")
+
+        for heading in ("Visual Asset Manifest", "Audio Asset Manifest"):
+            section = self._architecture_section(architecture, heading)
+            lowered = section.lower()
+            has_method = any(
+                term in lowered
+                for term in ("technique", "description", "generation", "method")
+            )
+            has_owner = any(
+                term in lowered for term in ("owner", "owning", "responsible")
+            )
+            if not has_owner or "validation" not in lowered or not has_method:
+                raise ValueError(
+                    f"{heading} must include owner, implementation method, and "
+                    "validation columns"
+                )
+            if not re.search(
+                r"(?:[A-Za-z_][A-Za-z0-9_]*/)*[A-Za-z_][A-Za-z0-9_]*\.py",
+                section,
+            ):
+                raise ValueError(f"{heading} must name at least one owning Python file")
+
+        if self.renderer == "moderngl":
+            shader_section = self._architecture_section(
+                architecture, "Shader Source Manifest"
+            )
+            shader_files = set(
+                re.findall(
+                    r"(?:[A-Za-z_][A-Za-z0-9_]*/)*"
+                    r"[A-Za-z_][A-Za-z0-9_]*\.(?:vert|frag|glsl)",
+                    shader_section,
+                )
+            )
+            if len(shader_files) < 2:
+                raise ValueError(
+                    "Shader Source Manifest must name separate vertex and fragment sources"
+                )
+
+    @staticmethod
+    def _architecture_section(architecture: str, heading: str) -> str:
+        match = re.search(
+            rf"(?ims)^#{{2,4}}[ \t]+{re.escape(heading)}[ \t]*:?[ \t]*$"
+            r"(.*?)(?=^##\s+|\Z)",
+            architecture,
+        )
+        return match.group(1) if match else ""
+
+    def _recover_architecture_attempt(self) -> str | None:
+        planning = self._journal().artifacts / "planning"
+        for path in sorted(
+            planning.glob("architecture.failed_*.txt"), reverse=True
+        ):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            architecture = content.rsplit("\n\nValidation error:", 1)[0].rstrip()
+            try:
+                self._validate_architecture(architecture)
+            except ValueError:
+                continue
+            return architecture
+        return None
+
     async def _qa_contract_checkpoint(
         self,
         brief: str,
@@ -821,7 +1087,7 @@ class GameBuilder:
         journal = self._journal()
         task_name = "qa_contract"
         artifact = journal.task_artifact(task_name)
-        if artifact:
+        if journal.task_complete(task_name) and artifact:
             self.progress("  Reusing checkpoint: QA acceptance contract")
             raw = journal.read_json_artifact(artifact)
             if not journal.task_complete(task_name):
@@ -894,33 +1160,72 @@ class GameBuilder:
             artifact = journal.task_artifact(task_name)
             if not artifact:
                 raise WorkspaceError("Plan checkpoint has no artifact")
-            self.progress("  Reusing checkpoint: plan")
             plan = self._normalize_plan(GamePlan.from_dict(journal.read_json_artifact(artifact)))
-            self._validate_plan(plan)
-            return plan
+            try:
+                self._validate_plan(plan)
+            except ValueError as exc:
+                self.progress(
+                    "  Saved plan does not meet the current build contract; "
+                    f"regenerating it: {exc}"
+                )
+                journal.invalidate_task("plan", str(exc))
+                journal.invalidate_task(
+                    "qa_contract",
+                    "The build plan changed and requires a new QA acceptance contract",
+                )
+                journal.revoke_qa_contract()
+            else:
+                self.progress("  Reusing checkpoint: plan")
+                return plan
         journal.start_task(task_name)
         try:
-            raw_plan = await self.provider.structured(
-                role=self._technical_role(ArchitectRole),
-                prompt=(
-                    f"{self._specification_context()}"
-                    f"Original brief:\n{brief}\n\nDesigner proposal:\n{design}\n\n"
-                    f"Architecture proposal:\n{architecture}\n\nRenderer: {self.renderer}. "
-                    "Resolve conflicts and submit the final build contract. Include main.py "
-                    "exactly once and declare every non-standard-library import."
-                ),
-                tool_name="submit_game_plan",
-                description="Submit the final implementation and dependency contract.",
-                schema=PLAN_SCHEMA,
+            prompt = (
+                f"{self._specification_context()}"
+                f"Original brief:\n{brief}\n\nDesigner proposal:\n{design}\n\n"
+                f"Architecture proposal:\n{architecture}\n\nRenderer: {self.renderer}. "
+                "Resolve conflicts and submit the final build contract. Include main.py "
+                "exactly once and declare every non-standard-library import."
             )
-            plan = self._normalize_plan(GamePlan.from_dict(raw_plan))
-            self._validate_plan(plan)
-            artifact = journal.write_json_artifact("planning/plan.json", plan.as_dict())
-            journal.complete_task(task_name, artifact)
-            return plan
+            retry_context = ""
+            for attempt in range(1, PLAN_GENERATION_ATTEMPTS + 1):
+                raw_plan = await self.provider.structured(
+                    role=self._technical_role(ArchitectRole),
+                    prompt=prompt + retry_context,
+                    tool_name="submit_game_plan",
+                    description="Submit the final implementation and dependency contract.",
+                    schema=PLAN_SCHEMA,
+                )
+                try:
+                    plan = self._normalize_plan(GamePlan.from_dict(raw_plan))
+                    self._validate_plan(plan)
+                except (KeyError, TypeError, ValueError, WorkspaceError) as exc:
+                    failed = dict(raw_plan)
+                    failed["validation_error"] = str(exc)
+                    journal.write_json_artifact(
+                        f"planning/plan.failed_{attempt:02d}.json", failed
+                    )
+                    if attempt >= PLAN_GENERATION_ATTEMPTS:
+                        raise
+                    self.progress(
+                        f"  Build contract failed local validation: {exc}. "
+                        f"Retrying ({attempt + 1}/{PLAN_GENERATION_ATTEMPTS})..."
+                    )
+                    retry_context = (
+                        "\n\nYour previous build contract failed local validation.\n"
+                        f"Validation error: {exc}\n\n"
+                        "Return a corrected complete contract. Every render-effect shader "
+                        "source and every visual/audio asset owner must also appear in files."
+                    )
+                    continue
+                artifact = journal.write_json_artifact(
+                    "planning/plan.json", plan.as_dict()
+                )
+                journal.complete_task(task_name, artifact)
+                return plan
         except BaseException as exc:
             journal.fail_task(task_name, exc)
             raise
+        raise WorkspaceError("Plan generation exhausted validation attempts")
 
     def _restore_completed_file(self, spec: FileSpec) -> bool:
         journal = self._journal()
@@ -1057,6 +1362,7 @@ class GameBuilder:
     ) -> ValidationResult:
         journal = self._journal()
         allowed = {spec.name for spec in plan.files}
+        ordered_names = [spec.name for spec in plan.files]
         validation_task = (
             f"{checkpoint_prefix}:validation" if checkpoint_prefix else "validation"
         )
@@ -1070,7 +1376,19 @@ class GameBuilder:
                     allowed_names=allowed,
                     checkpoint_prefix=checkpoint_prefix,
                 )
-                self._apply_replacements(patch, allowed)
+                try:
+                    self._apply_replacements(patch, allowed)
+                except WorkspaceError as exc:
+                    journal.invalidate_task(task_name, str(exc))
+                    self.progress(
+                        f"  Ignoring invalid legacy repair checkpoint {task_name}: {exc}"
+                    )
+        self._restore_file_repair_checkpoints(checkpoint_prefix, allowed)
+        if journal.task_complete(validation_task):
+            self.progress(f"  Reusing completed validation checkpoint: {validation_task}")
+            return ValidationResult(
+                True, f"Validation checkpoint {validation_task} was already complete"
+            )
 
         result = self._handle_missing_dependency(
             plan,
@@ -1083,16 +1401,47 @@ class GameBuilder:
                 journal.complete_task(validation_task)
                 return result
             task_name = self._repair_task_name(checkpoint_prefix, attempt)
-            if journal.task_complete(task_name):
-                continue
             self.progress(f"  Repair pass {attempt}/{self.repair_attempts}: {result.report}")
-            patch = await self._review_checkpoint(
-                attempt=attempt,
-                context=f"Automated validation failed:\n{result.report}",
-                allowed_names=allowed,
-                checkpoint_prefix=checkpoint_prefix,
+            diagnostic_files = self._diagnostic_files(result.report, ordered_names)
+            changed: list[str] = []
+            if diagnostic_files:
+                self.progress(
+                    f"    Repairing {len(diagnostic_files)} affected files individually: "
+                    + ", ".join(diagnostic_files)
+                )
+                for number, filename in enumerate(diagnostic_files, start=1):
+                    self.progress(
+                        f"    Repair checkpoint {number}/{len(diagnostic_files)}: {filename}"
+                    )
+                    patch = await self._review_file_checkpoint(
+                        attempt=attempt,
+                        filename=filename,
+                        validation_report=result.report,
+                        allowed_names=allowed,
+                        checkpoint_prefix=checkpoint_prefix,
+                    )
+                    changed.extend(self._apply_replacements(patch, allowed))
+            else:
+                if journal.task_complete(task_name):
+                    continue
+                patch = await self._review_checkpoint(
+                    attempt=attempt,
+                    context=f"Automated validation failed:\n{result.report}",
+                    allowed_names=allowed,
+                    checkpoint_prefix=checkpoint_prefix,
+                )
+                changed.extend(self._apply_replacements(patch, allowed))
+            if not changed:
+                message = (
+                    "Repair stopped because the reviewer produced no source changes; "
+                    "remaining repair passes were not spent."
+                )
+                self.progress(f"  {message}")
+                return ValidationResult(False, f"{result.report}\n{message}")
+            self.progress(
+                f"    Applied repairs to {len(set(changed))} files: "
+                + ", ".join(dict.fromkeys(changed))
             )
-            self._apply_replacements(patch, allowed)
             result = self._handle_missing_dependency(
                 plan,
                 self._run_validation(),
@@ -1168,6 +1517,189 @@ class GameBuilder:
         prefix = f"{checkpoint_prefix}:" if checkpoint_prefix else ""
         return f"{prefix}repair:{attempt}"
 
+    @staticmethod
+    def _repair_file_task_name(
+        checkpoint_prefix: str, attempt: int, filename: str
+    ) -> str:
+        prefix = f"{checkpoint_prefix}:" if checkpoint_prefix else ""
+        return f"{prefix}repair_file:{attempt:03d}:{filename}"
+
+    @staticmethod
+    def _diagnostic_files(report: str, ordered_names: Sequence[str]) -> list[str]:
+        normalized_report = report.replace("\\", "/").lower()
+        return [
+            filename
+            for filename in ordered_names
+            if filename.endswith(".py") and filename.lower() in normalized_report
+        ]
+
+    def _restore_file_repair_checkpoints(
+        self, checkpoint_prefix: str, allowed_names: set[str]
+    ) -> None:
+        journal = self._journal()
+        prefix = f"{checkpoint_prefix}:" if checkpoint_prefix else ""
+        task_prefix = f"{prefix}repair_file:"
+        task_names = sorted(
+            name
+            for name, task in journal.state.get("tasks", {}).items()
+            if name.startswith(task_prefix)
+            and task.get("status") == "complete"
+            and task.get("artifact")
+        )
+        for task_name in task_names:
+            artifact = journal.task_artifact(task_name)
+            if not artifact:
+                continue
+            patch = self._normalize_patch(dict(journal.read_json_artifact(artifact)))
+            self._apply_replacements(patch, allowed_names)
+            self.progress(f"  Reusing checkpoint artifact: {task_name}")
+
+    async def _review_file_checkpoint(
+        self,
+        *,
+        attempt: int,
+        filename: str,
+        validation_report: str,
+        allowed_names: set[str],
+        checkpoint_prefix: str = "",
+    ) -> dict[str, Any]:
+        if filename not in allowed_names:
+            raise WorkspaceError(f"Cannot repair unplanned file {filename!r}")
+        journal = self._journal()
+        task_name = self._repair_file_task_name(
+            checkpoint_prefix, attempt, filename
+        )
+        artifact_prefix = checkpoint_prefix.replace(":", "_")
+        directory = f"{artifact_prefix}/" if artifact_prefix else ""
+        artifact = journal.task_artifact(task_name)
+        if artifact:
+            saved_patch = self._normalize_patch(
+                dict(journal.read_json_artifact(artifact))
+            )
+            try:
+                self._validate_file_repair_patch(saved_patch, filename)
+            except (SyntaxError, WorkspaceError) as exc:
+                journal.invalidate_task(task_name, str(exc))
+                self.progress(
+                    f"  Ignoring invalid file repair checkpoint {task_name}: {exc}"
+                )
+            else:
+                self.progress(f"  Reusing checkpoint artifact: {task_name}")
+                return saved_patch
+
+        source_path = self.workspace.path_for(filename)
+        source = source_path.read_text(encoding="utf-8")
+        related_sources = self._related_source_context(filename, allowed_names)
+        journal.start_task(task_name)
+        retry_context = ""
+        try:
+            prompt = (
+                f"{self._specification_context()}Automated validation failed:\n"
+                f"{validation_report}\n\nYour sole repair target is {filename}. Return "
+                "exactly one complete replacement for that file, even when diagnostics "
+                "also name other files; those files receive separate checkpoints. Do not "
+                "return a diff, partial file, or decline the repair. Preserve behavior and "
+                "fix types at their source without ignore comments or weakened checks.\n\n"
+                f"Build contract:\n{self.workspace.read_plan().as_context()}\n\n"
+                f"Current {filename}:\n===== {filename} =====\n{source}\n\n"
+                f"Related local sources for API context:\n{related_sources}"
+            )
+            for source_attempt in range(1, FILE_GENERATION_ATTEMPTS + 1):
+                patch = self._normalize_patch(
+                    await self.provider.structured(
+                        role=self._technical_role(RepairReviewerRole),
+                        prompt=prompt + retry_context,
+                        tool_name="submit_replacements",
+                        description=(
+                            f"Submit one complete corrected replacement for {filename}."
+                        ),
+                        schema=PATCH_SCHEMA,
+                    )
+                )
+                try:
+                    self._validate_file_repair_patch(patch, filename)
+                except (SyntaxError, WorkspaceError) as exc:
+                    failed = dict(patch)
+                    failed["validation_error"] = str(exc)
+                    journal.write_json_artifact(
+                        f"{directory}repairs/{attempt:03d}/{filename}"
+                        f".failed_{source_attempt:02d}.json",
+                        failed,
+                    )
+                    if source_attempt >= FILE_GENERATION_ATTEMPTS:
+                        raise
+                    self.progress(
+                        f"      {filename} failed source validation: {exc}. "
+                        f"Retrying ({source_attempt + 1}/{FILE_GENERATION_ATTEMPTS})..."
+                    )
+                    retry_context = (
+                        "\n\nYour previous repair failed local source validation.\n"
+                        f"Validation error: {exc}\n\nPrevious invalid replacement:\n"
+                        f"{patch.get('files', [])}\n\nReturn a corrected complete file."
+                    )
+                    continue
+                artifact = journal.write_json_artifact(
+                    f"{directory}repairs/{attempt:03d}/{filename}.json", patch
+                )
+                journal.complete_task(task_name, artifact)
+                return patch
+        except BaseException as exc:
+            journal.fail_task(task_name, exc)
+            raise
+        raise WorkspaceError(f"File repair exhausted attempts for {filename}")
+
+    def _validate_file_repair_patch(
+        self, patch: dict[str, Any], filename: str
+    ) -> None:
+        replacements = patch["files"]
+        if len(replacements) > 1 or (
+            replacements and replacements[0]["filename"] != filename
+        ):
+            raise WorkspaceError(
+                f"File repair for {filename!r} must return only that filename"
+            )
+        for replacement in replacements:
+            self.workspace.validate_generated_source(
+                filename, str(replacement["content"])
+            )
+
+    def _related_source_context(
+        self, filename: str, allowed_names: set[str]
+    ) -> str:
+        """Include locally imported modules without resending the entire project."""
+        try:
+            source = self.workspace.path_for(filename).read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=filename)
+        except (OSError, SyntaxError):
+            return "(source imports could not be inspected)"
+        imported_modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_modules.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules.add(node.module)
+
+        sections: list[str] = []
+        for candidate in sorted(allowed_names):
+            if candidate == filename or not candidate.endswith(".py"):
+                continue
+            module = candidate.removesuffix(".py").replace("/", ".")
+            if module.endswith(".__init__"):
+                module = module.removesuffix(".__init__")
+            if not any(
+                imported == module
+                or imported.startswith(f"{module}.")
+                or module.endswith(f".{imported}")
+                for imported in imported_modules
+            ):
+                continue
+            path = self.workspace.path_for(candidate)
+            if path.is_file():
+                sections.append(
+                    f"===== {candidate} =====\n{path.read_text(encoding='utf-8')}"
+                )
+        return "\n\n".join(sections) or "(no project-local imports detected)"
+
     async def _review_checkpoint(
         self,
         *,
@@ -1181,7 +1713,7 @@ class GameBuilder:
         artifact_prefix = checkpoint_prefix.replace(":", "_")
         directory = f"{artifact_prefix}/" if artifact_prefix else ""
         artifact = journal.task_artifact(task_name)
-        if artifact:
+        if artifact and journal.task_complete(task_name):
             self.progress(f"  Reusing checkpoint artifact: {task_name}")
             raw_patch = dict(journal.read_json_artifact(artifact))
             try:
@@ -1202,6 +1734,7 @@ class GameBuilder:
             patch = self._normalize_patch(
                 await self._review(context=context, allowed_names=allowed_names)
             )
+            self._validate_replacement_names(patch, allowed_names)
             artifact = journal.write_json_artifact(
                 f"{directory}repairs/{attempt}.json", patch
             )
@@ -1237,15 +1770,35 @@ class GameBuilder:
             schema=PATCH_SCHEMA,
         )
 
-    def _apply_replacements(self, patch: dict[str, Any], allowed: set[str]) -> None:
+    def _apply_replacements(
+        self, patch: dict[str, Any], allowed: set[str]
+    ) -> list[str]:
         patch = self._normalize_patch(patch)
+        self._validate_replacement_names(patch, allowed)
+        changed: list[str] = []
+        for replacement in patch["files"]:
+            filename = str(replacement["filename"])
+            content = str(replacement["content"])
+            path = self.workspace.path_for(filename)
+            normalized_content = content.rstrip() + "\n"
+            if path.is_file() and path.read_text(encoding="utf-8") == normalized_content:
+                continue
+            self.workspace.write_generated_source(filename, content)
+            changed.append(filename)
+        if patch.get("summary"):
+            self.progress(f"  Reviewer: {patch['summary']}")
+        return changed
+
+    @staticmethod
+    def _validate_replacement_names(
+        patch: dict[str, Any], allowed: set[str]
+    ) -> None:
         for replacement in patch["files"]:
             filename = str(replacement["filename"])
             if filename not in allowed:
-                raise WorkspaceError(f"Reviewer attempted to write unplanned file {filename!r}")
-            self.workspace.write_generated_source(filename, str(replacement["content"]))
-        if patch.get("summary"):
-            self.progress(f"  Reviewer: {patch['summary']}")
+                raise WorkspaceError(
+                    f"Reviewer attempted to write unplanned file {filename!r}"
+                )
 
     @staticmethod
     def _normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
@@ -1389,13 +1942,54 @@ class GameBuilder:
         return "".join(output)
 
     def _run_validation(self) -> ValidationResult:
+        reports: list[str] = []
+        self.workspace.write_typecheck_config()
+        self.progress("    Validating Python compilation...")
         static = validate_project(self.workspace.root)
         if not static.ok:
             return static
+        reports.append(static.report)
+        self.progress("    Running strict Pyright validation...")
+        typing = self.type_checker(self.workspace.root, self.environment.python)
+        if not typing.ok:
+            return ValidationResult(False, "\n".join((*reports, typing.report)))
+        reports.append(typing.report)
+        self.progress("    Checking the renderer contract...")
         renderer = validate_renderer_project(self.workspace.root, self.renderer)
         if not renderer.ok:
-            return renderer
-        return smoke_test(self.workspace.root, self.environment.python, self.smoke_timeout)
+            return ValidationResult(False, "\n".join((*reports, renderer.report)))
+        reports.append(renderer.report)
+        self.progress(f"    Running the {self.smoke_timeout:g}s runtime smoke test...")
+        runtime = smoke_test(
+            self.workspace.root, self.environment.python, self.smoke_timeout
+        )
+        return ValidationResult(runtime.ok, "\n".join((*reports, runtime.report)))
+
+    @staticmethod
+    def _owner_files(owner: str) -> list[str]:
+        """Return one or more explicitly listed owner paths from a contract field."""
+        owners: list[str] = []
+        for part in re.split(r"\s+(?:and|&)\s+|\s*[,;]\s*", owner):
+            normalized = re.sub(r"^(?:and|&)\s+", "", part.strip(), flags=re.IGNORECASE)
+            normalized = normalized.strip().strip("`")
+            if normalized:
+                owners.append(normalized)
+        return owners
+
+    @classmethod
+    def _validate_owner(
+        cls,
+        owner: str,
+        planned_files: set[str],
+        label: str,
+    ) -> None:
+        owners = cls._owner_files(owner)
+        missing = [candidate for candidate in owners if candidate not in planned_files]
+        if not owners or missing:
+            raise ValueError(
+                f"{label} owner is not a planned file: {owner!r}"
+                + (f"; unplanned owners: {missing}" if missing else "")
+            )
 
     def _normalize_plan(self, plan: GamePlan) -> GamePlan:
         renderer_profile = get_renderer_profile(self.renderer)
@@ -1433,6 +2027,33 @@ class GameBuilder:
             dependencies.append(item)
         dependencies.extend(baseline)
         files = [item for item in plan.files if item.name != "main.py"]
+        planned_names = {item.name for item in plan.files}
+        referenced_files: list[tuple[str, str]] = []
+        for effect in plan.render_effects:
+            referenced_files.append(
+                (effect.owner, f"Owns render effect: {effect.experience}")
+            )
+            referenced_files.extend(
+                (source, f"Shader source for: {effect.experience}")
+                for source in effect.source_files
+            )
+        referenced_files.extend(
+            (asset.owner, f"Generates visual asset: {asset.experience}")
+            for asset in plan.visual_assets
+        )
+        referenced_files.extend(
+            (asset.owner, f"Generates audio asset: {asset.experience}")
+            for asset in plan.audio_assets
+        )
+        for filename, purpose in referenced_files:
+            if filename in planned_names:
+                continue
+            try:
+                self.workspace.path_for(filename)
+            except WorkspaceError:
+                continue
+            files.append(FileSpec(name=filename, purpose=purpose, public_api=[]))
+            planned_names.add(filename)
         files.extend(item for item in plan.files if item.name == "main.py")
         return GamePlan(
             title=plan.title,
@@ -1446,10 +2067,11 @@ class GameBuilder:
                 plan.rendering_strategy or renderer_profile.default_strategy
             ),
             render_effects=plan.render_effects,
+            visual_assets=plan.visual_assets,
+            audio_assets=plan.audio_assets,
         )
 
-    @staticmethod
-    def _validate_plan(plan: GamePlan) -> None:
+    def _validate_plan(self, plan: GamePlan) -> None:
         names = [spec.name for spec in plan.files]
         if names.count("main.py") != 1:
             raise ValueError("Plan must contain main.py exactly once")
@@ -1457,6 +2079,7 @@ class GameBuilder:
             raise ValueError("Plan must place main.py last")
         if len(names) != len(set(names)):
             raise ValueError("Plan contains duplicate filenames")
+        planned_files = set(names)
         for number, effect in enumerate(plan.render_effects, start=1):
             if not all(
                 (
@@ -1467,6 +2090,68 @@ class GameBuilder:
                 )
             ):
                 raise ValueError(f"Render effect {number} has an empty contract field")
+            self._validate_owner(
+                effect.owner, planned_files, f"Render effect {number}"
+            )
+            missing_sources = [
+                source for source in effect.source_files if source not in planned_files
+            ]
+            if missing_sources:
+                raise ValueError(
+                    f"Render effect {number} references unplanned source files: "
+                    f"{missing_sources}"
+                )
+        for number, asset in enumerate(plan.visual_assets, start=1):
+            if not all(
+                (
+                    asset.experience,
+                    asset.kind,
+                    asset.owner,
+                    asset.technique,
+                    asset.validation,
+                )
+            ):
+                raise ValueError(f"Visual asset {number} has an empty contract field")
+            self._validate_owner(
+                asset.owner, planned_files, f"Visual asset {number}"
+            )
+        for number, asset in enumerate(plan.audio_assets, start=1):
+            if not all(
+                (
+                    asset.experience,
+                    asset.kind,
+                    asset.owner,
+                    asset.technique,
+                    asset.validation,
+                )
+            ):
+                raise ValueError(f"Audio asset {number} has an empty contract field")
+            self._validate_owner(
+                asset.owner, planned_files, f"Audio asset {number}"
+            )
+        if self.renderer == "moderngl":
+            shader_sources = {
+                name
+                for name in names
+                if Path(name).suffix in {".vert", ".frag", ".glsl"}
+            }
+            if len(shader_sources) < 2:
+                raise ValueError(
+                    "ModernGL plans must include separate planned vertex and fragment "
+                    "shader sources using .vert, .frag, or stage-specific .glsl files"
+                )
+            referenced_shader_sources = {
+                source
+                for effect in plan.render_effects
+                for source in effect.source_files
+                if Path(source).suffix in {".vert", ".frag", ".glsl"}
+            }
+            unreferenced = shader_sources - referenced_shader_sources
+            if unreferenced:
+                raise ValueError(
+                    "ModernGL shader files must be assigned to render effects: "
+                    f"{sorted(unreferenced)}"
+                )
         imports: set[str] = set()
         distributions: set[str] = set()
         for dependency in plan.dependencies:
@@ -1485,8 +2170,9 @@ class GameBuilder:
         self.progress(f"  output: {self.workspace.root}")
         self.progress(f"  provider: {self.provider.provider_name}")
         self.progress(f"  model: {self.provider.model}")
-        if getattr(self.provider, "host", ""):
-            self.progress(f"  provider host: {self.provider.host}")
+        provider_host = str(getattr(self.provider, "host", ""))
+        if provider_host:
+            self.progress(f"  provider host: {provider_host}")
         self.progress(f"  renderer: {self.renderer}")
         self.progress(f"  design iterations: {self.design_iterations}")
         self.progress(f"  implementation iterations: {self.implementation_iterations}")

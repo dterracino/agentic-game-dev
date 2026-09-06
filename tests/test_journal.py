@@ -66,6 +66,51 @@ class JournalTests(unittest.TestCase):
 
             self.assertEqual(RunJournal.load(root).state["repair_attempts"], 4)
 
+    def test_invalidating_plan_and_revoking_qa_persists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            journal = RunJournal.create(
+                root,
+                brief="test",
+                model="model",
+                renderer="moderngl",
+                repair_attempts=2,
+                smoke_timeout=8,
+            )
+            journal.complete_task("plan", "artifacts/planning/plan.json")
+            journal.approve_qa_contract()
+
+            journal.invalidate_task("plan", "shader contract changed")
+            journal.revoke_qa_contract()
+            loaded = RunJournal.load(root)
+
+            self.assertEqual(loaded.state["tasks"]["plan"]["status"], "pending")
+            self.assertEqual(
+                loaded.state["tasks"]["plan"]["error"], "shader contract changed"
+            )
+            self.assertFalse(loaded.state["qa_approved"])
+
+    def test_provider_change_persists_for_explicit_resume_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            journal = RunJournal.create(
+                root,
+                brief="test",
+                model="local-model",
+                renderer="pygame",
+                repair_attempts=2,
+                smoke_timeout=8,
+                provider="ollama",
+                provider_host="http://localhost:11434",
+            )
+
+            journal.change_provider("openai", "api-model")
+            loaded = RunJournal.load(root)
+
+            self.assertEqual(loaded.state["provider"], "openai")
+            self.assertEqual(loaded.state["model"], "api-model")
+            self.assertEqual(loaded.state["provider_host"], "")
+
     def test_artifacts_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             journal = RunJournal.create(

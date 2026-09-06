@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import sys
-from contextlib import redirect_stdout
-from io import StringIO
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
 from agentic_game_dev.validation import (
     run_game,
     smoke_test,
     validate_project,
     validate_renderer_project,
+    validate_types,
 )
 
 
@@ -25,6 +28,42 @@ class ValidationTests(unittest.TestCase):
 
             self.assertFalse(result.ok)
             self.assertIn("invalid syntax", result.report)
+
+    def test_strict_type_validation_uses_game_interpreter(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            game_python = root / "game-python.exe"
+            (root / "main.py").write_text(
+                "def main() -> None:\n    return None\n", encoding="utf-8"
+            )
+            (root / "pyrightconfig.json").write_text(
+                '{"typeCheckingMode": "strict"}\n', encoding="utf-8"
+            )
+            with patch(
+                "agentic_game_dev.validation.subprocess.run",
+                return_value=CompletedProcess([], 0, "0 errors, 0 warnings\n", ""),
+            ) as run:
+                result = validate_types(root, game_python)
+
+            self.assertTrue(result.ok, result.report)
+            self.assertIn("0 errors", result.report)
+            self.assertIn("--pythonpath", run.call_args.args[0])
+            self.assertIn(str(game_python), run.call_args.args[0])
+
+    def test_type_validation_rejects_suppression_before_pyright(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "main.py").write_text(
+                "value: int = 'bad'  # type: ignore[assignment]\n",
+                encoding="utf-8",
+            )
+
+            with patch("agentic_game_dev.validation.subprocess.run") as run:
+                result = validate_types(root, Path(sys.executable))
+
+            self.assertFalse(result.ok)
+            self.assertIn("suppression comments are prohibited", result.report)
+            run.assert_not_called()
 
     def test_runtime_probe_rejects_clean_immediate_exit_and_logs_it(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -15,5 +15,9 @@ parser-driven game. Every criterion must state an automated test, a scripted pla
 evidence where applicable. A process merely remaining alive is never proof of correct gameplay.
 Mark failures that invalidate the promised game as blocking. Include evidence for every promised
 visual effect and verify that the selected renderer is genuinely used rather than merely declared
-as a dependency. Do not adapt requirements to an implementation because implementation has not
+as a dependency. Include evidence that every contracted sprite, world layer, item, enemy,
+background, and UI asset is visibly rendered during a reachable game state. Do not adapt
+Also require reachable playtest evidence for each contracted sound effect or ambience cue, including
+the gameplay event that triggers it and confirmation that audio-disabled environments degrade
+gracefully. Do not adapt requirements to an implementation because implementation has not
 started."""
